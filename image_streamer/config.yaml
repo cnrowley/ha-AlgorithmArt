@@ -1,0 +1,48 @@
+name: "Image Streamer"
+description: "Serve stored images or generate fractals/DLA and expose via HTTP."
+version: "0.1.0"
+slug: "image_streamer"
+init: false
+arch:
+  - amd64
+  - aarch64
+
+# Expose a LAN port: container listens 8000, host gets 8099
+ports:
+  8000/tcp: 8099
+ports_description:
+  8000/tcp: "Image HTTP server (PNG/JPEG endpoints)"
+
+# Mount HA folders so you can serve local images
+map:
+  - type: share
+    read_only: true
+  - type: media
+    read_only: true
+
+# Optional: show OPEN WEB UI button
+webui: "http://[HOST]:[PORT:8000]/"
+
+options:
+  mode: "static"          # static | fractal | dla
+  static_dir: "/share/images"
+  interval_ms: 1000
+  width: 800
+  height: 480
+  fractal_type: "mandelbrot"   # mandelbrot | julia
+  julia_c_re: -0.8
+  julia_c_im: 0.156
+  dla_particles: 2500
+  dla_seed: 1
+
+schema:
+  mode: "list(static|fractal|dla)"
+  static_dir: "str"
+  interval_ms: "int(50,60000)"
+  width: "int(16,4096)"
+  height: "int(16,4096)"
+  fractal_type: "list(mandelbrot|julia)"
+  julia_c_re: "float"
+  julia_c_im: "float"
+  dla_particles: "int(100,200000)"
+  dla_seed: "int"
