@@ -11,6 +11,7 @@ COPY src/ ./src/
 
 RUN go build -o /out/dla.x ./src/dla/dla.go
 RUN go build -o /out/fractalgen.x ./src/fractal/fractalgen.go
+RUN go mod download
 RUN go build -o /out/goban.x ./src/goban/goban.go
 
 # ------------------------------------------------------------------
