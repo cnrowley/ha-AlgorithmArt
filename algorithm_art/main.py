@@ -31,6 +31,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import sys
+import os
+sys.path.insert(0, '/app')  # ensure sibling modules are importable
+
 import requests
 from flask import Flask, Response, jsonify, request
 
@@ -410,10 +414,18 @@ def generate_goban():
 
 @app.post("/push")
 def push_to_device():
-    """Forward raw image bytes to the photoframe's /api/display-image."""
+    """Forward raw image bytes to the photoframe's /api/display-image.
+
+    The target host defaults to PHOTOFRAME_HOST env var but can be
+    overridden per-call with a ?host= query parameter — the HA integration
+    passes the hostname configured in its config flow this way.
+    """
     image_data = request.get_data()
     if not image_data:
         return jsonify({"error": "No image data"}), 400
+
+    # Allow per-call host override from the HA integration
+    target_host = request.args.get("host") or PHOTOFRAME_HOST
 
     if image_data[:2] == b"BM":
         content_type = "image/bmp"
@@ -422,7 +434,7 @@ def push_to_device():
     else:
         content_type = request.content_type or "image/jpeg"
 
-    device_url = f"http://{PHOTOFRAME_HOST}/api/display-image"
+    device_url = f"http://{target_host}/api/display-image"
     _LOGGER.info("Pushing %d bytes (%s) to %s", len(image_data), content_type, device_url)
 
     try:
@@ -436,7 +448,7 @@ def push_to_device():
             return jsonify({"status": "ok"})
         return jsonify({"error": f"Device returned HTTP {resp.status_code}"}), 502
     except requests.exceptions.ConnectionError as exc:
-        return jsonify({"error": f"Cannot reach device: {exc}"}), 503
+        return jsonify({"error": f"Cannot reach device at {target_host}: {exc}"}), 503
     except requests.exceptions.Timeout:
         return jsonify({"error": "Device push timed out"}), 504
 

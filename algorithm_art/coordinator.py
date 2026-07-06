@@ -33,6 +33,10 @@ class PhotopainterArtCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize."""
         self.host = entry.data[CONF_HOST]
+        if not self.host.startswith(("http://", "https://")):
+            self.host = f"http://{self.host}"
+        # Separate hostname used for direct BMP push (set in config flow)
+        self.photoframe_host = entry.data.get("photoframe_host", "photoframe.local")
         self.session = async_get_clientsession(hass)
         self.entry = entry
         self.hass = hass

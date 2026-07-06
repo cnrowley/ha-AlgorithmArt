@@ -10,6 +10,7 @@ arch:
 
 map:
   - data
+  - share:rw
 
 ports:
   8765/tcp: 8765
@@ -19,6 +20,7 @@ ports_description:
 
 options:
   port: 8765
+  photoframe_host: "photoframe.local"
   dla_cmd: "dla.x"
   fractal_cmd: "fractalgen.x"
   goban_cmd: "goban.x"
@@ -27,6 +29,7 @@ options:
 
 schema:
   port: int
+  photoframe_host: str
   dla_cmd: str
   fractal_cmd: str
   goban_cmd: str

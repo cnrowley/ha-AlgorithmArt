@@ -2,8 +2,10 @@ package main
 
 import (
     "flag"
+    "fmt"
     "image"
     "image/color"
+    "log"
     "os"
     "strings"
 
@@ -31,21 +33,33 @@ const (
     White
 )
 
+func (s Stone) String() string {
+    switch s {
+    case Black:
+        return "B"
+    case White:
+        return "W"
+    default:
+        return "."
+    }
+}
+
 type Move struct {
     Color Stone
     X, Y  int
 }
 
 type Board struct {
-    Grid           [boardSize][boardSize]Stone
-    CapturedBlack  int // black stones captured (shown on right)
-    CapturedWhite  int // white stones captured (shown on left)
+    Grid          [boardSize][boardSize]Stone
+    CapturedBlack int // number of black stones captured
+    CapturedWhite int // number of white stones captured
 }
+
+var debug bool
 
 ////////////////////////////////////////////////////////////////////////////////
 
 func main() {
-
     input := flag.String("input", "", "SGF file")
     moveNum := flag.Int("move", 0, "Move number")
     output := flag.String("output", "frame.bmp", "Output")
@@ -58,25 +72,106 @@ func main() {
     gridThickness := flag.Int("grid-thickness", 1, "1 or 2")
     highlightMode := flag.String("highlight", "ring", "dot|ring|none")
 
+    flag.BoolVar(&debug, "debug", false, "print diagnostic output")
+
     flag.Parse()
 
-    data, _ := os.ReadFile(*input)
-    moves := parseSGF(string(data))
-
-    board := Board{}
-    for i := 0; i < *moveNum && i < len(moves); i++ {
-        board.Play(moves[i])
+    if *input == "" {
+        log.Fatal("ERROR: -input is required")
     }
 
-    img := render(board, moves, *moveNum,
-        *gridThickness,
-        *bgColor, *boardColor,
-        *whiteColor, *blackColor,
-        *highlightMode)
+    validateColor("bg", *bgColor)
+    validateColor("board", *boardColor)
+    validateColor("white-color", *whiteColor)
+    validateColor("black-color", *blackColor)
 
-    f, _ := os.Create(*output)
+    diag("Input SGF: %s", *input)
+    diag("Output BMP: %s", *output)
+    diag("Requested move: %d", *moveNum)
+
+    data, err := os.ReadFile(*input)
+    if err != nil {
+        log.Fatalf("ERROR: could not read SGF file %q: %v", *input, err)
+    }
+
+    diag("Read %d bytes from SGF", len(data))
+
+    moves := parseSGF(string(data))
+
+    diag("Parsed %d moves", len(moves))
+
+    for i := 0; i < len(moves) && i < 10; i++ {
+        diag(
+            "Move %3d: %s at SGF(%c%c) board(%d,%d)",
+            i+1,
+            moves[i].Color,
+            byte('a'+moves[i].X),
+            byte('a'+moves[i].Y),
+            moves[i].X,
+            moves[i].Y,
+        )
+    }
+
+    if len(moves) == 0 {
+        diag("WARNING: no moves were parsed. Board will contain no stones.")
+    }
+
+    if *moveNum > len(moves) {
+        diag("WARNING: requested move %d but SGF only has %d moves", *moveNum, len(moves))
+    }
+
+    board := Board{}
+
+    applied := 0
+    for i := 0; i < *moveNum && i < len(moves); i++ {
+        diag("Applying move %d/%d: %s (%d,%d)", i+1, *moveNum, moves[i].Color, moves[i].X, moves[i].Y)
+        board.Play(moves[i])
+        applied++
+    }
+
+    blackOnBoard, whiteOnBoard := board.CountStones()
+
+    diag("Applied moves: %d", applied)
+    diag("Black stones on board: %d", blackOnBoard)
+    diag("White stones on board: %d", whiteOnBoard)
+    diag("Captured black stones: %d", board.CapturedBlack)
+    diag("Captured white stones: %d", board.CapturedWhite)
+
+    img := render(
+        board,
+        moves,
+        *moveNum,
+        *gridThickness,
+        *bgColor,
+        *boardColor,
+        *whiteColor,
+        *blackColor,
+        *highlightMode,
+    )
+
+    f, err := os.Create(*output)
+    if err != nil {
+        log.Fatalf("ERROR: could not create output file %q: %v", *output, err)
+    }
     defer f.Close()
-    bmp.Encode(f, img)
+
+    if err := bmp.Encode(f, img); err != nil {
+        log.Fatalf("ERROR: could not encode BMP %q: %v", *output, err)
+    }
+
+    diag("Wrote BMP successfully: %s", *output)
+}
+
+func diag(format string, args ...any) {
+    if debug {
+        log.Printf(format, args...)
+    }
+}
+
+func validateColor(flagName, name string) {
+    if _, ok := palette[name]; !ok {
+        log.Fatalf("ERROR: unknown color for -%s: %q", flagName, name)
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -84,27 +179,84 @@ func main() {
 
 func parseSGF(s string) []Move {
     var moves []Move
+
     s = strings.ReplaceAll(s, "\n", "")
-    for _, t := range strings.Split(s, ";") {
-        if strings.HasPrefix(t, "B[") || strings.HasPrefix(t, "W[") {
-            col := Black
-            if t[0] == 'W' {
-                col = White
-            }
-            x := int(t[2] - 'a')
-            y := int(t[3] - 'a')
-            moves = append(moves, Move{col, x, y})
+    s = strings.ReplaceAll(s, "\r", "")
+    s = strings.ReplaceAll(s, "\t", "")
+
+    tokens := strings.Split(s, ";")
+
+    diag("SGF split into %d semicolon tokens", len(tokens))
+
+    malformed := 0
+
+    for _, t := range tokens {
+        t = strings.TrimSpace(t)
+
+        if !(strings.HasPrefix(t, "B[") || strings.HasPrefix(t, "W[")) {
+            continue
         }
+
+        end := strings.Index(t, "]")
+        if end < 0 {
+            malformed++
+            diag("Malformed move token, missing closing bracket: %q", t)
+            continue
+        }
+
+        coord := t[2:end]
+
+        // SGF pass move: B[] or W[]
+        if coord == "" {
+            diag("Pass move encountered and ignored: %q", t)
+            continue
+        }
+
+        if len(coord) < 2 {
+            malformed++
+            diag("Malformed move coordinate: %q from token %q", coord, t)
+            continue
+        }
+
+        col := Black
+        if t[0] == 'W' {
+            col = White
+        }
+
+        x := int(coord[0] - 'a')
+        y := int(coord[1] - 'a')
+
+        if !inBounds(x, y) {
+            malformed++
+            diag("Out-of-bounds move ignored: %q -> (%d,%d)", coord, x, y)
+            continue
+        }
+
+        moves = append(moves, Move{col, x, y})
     }
+
+    diag("Malformed/out-of-bounds move tokens ignored: %d", malformed)
+
     return moves
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// RULES (with capture tracking)
+// RULES
 
 func (b *Board) Play(m Move) {
     if !inBounds(m.X, m.Y) {
+        diag("Ignoring out-of-bounds move: %s (%d,%d)", m.Color, m.X, m.Y)
         return
+    }
+
+    if b.Grid[m.Y][m.X] != Empty {
+        diag(
+            "WARNING: overwriting occupied point at (%d,%d): old=%s new=%s",
+            m.X,
+            m.Y,
+            b.Grid[m.Y][m.X],
+            m.Color,
+        )
     }
 
     b.Grid[m.Y][m.X] = m.Color
@@ -116,11 +268,29 @@ func (b *Board) Play(m Move) {
 
     for _, d := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
         nx, ny := m.X+d[0], m.Y+d[1]
+
         if inBounds(nx, ny) && b.Grid[ny][nx] == enemy {
             if !b.hasLiberty(nx, ny, make(map[[2]int]bool)) {
+                beforeBlack := b.CapturedBlack
+                beforeWhite := b.CapturedWhite
+
                 b.removeGroup(nx, ny)
+
+                diag(
+                    "Capture after move %s (%d,%d): captured black +%d, white +%d",
+                    m.Color,
+                    m.X,
+                    m.Y,
+                    b.CapturedBlack-beforeBlack,
+                    b.CapturedWhite-beforeWhite,
+                )
             }
         }
+    }
+
+    // This does not enforce suicide as illegal, but warns if it happens.
+    if b.Grid[m.Y][m.X] == m.Color && !b.hasLiberty(m.X, m.Y, make(map[[2]int]bool)) {
+        diag("WARNING: move %s at (%d,%d) leaves own group without liberties", m.Color, m.X, m.Y)
     }
 }
 
@@ -135,18 +305,22 @@ func (b *Board) hasLiberty(x, y int, visited map[[2]int]bool) bool {
 
     for _, d := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
         nx, ny := x+d[0], y+d[1]
+
         if !inBounds(nx, ny) {
             continue
         }
+
         if b.Grid[ny][nx] == Empty {
             return true
         }
+
         if b.Grid[ny][nx] == color {
             if b.hasLiberty(nx, ny, visited) {
                 return true
             }
         }
     }
+
     return false
 }
 
@@ -160,6 +334,7 @@ func (b *Board) removeGroup(x, y int) {
         stack = stack[:len(stack)-1]
 
         px, py := p[0], p[1]
+
         if !inBounds(px, py) || b.Grid[py][px] != color {
             continue
         }
@@ -172,11 +347,30 @@ func (b *Board) removeGroup(x, y int) {
         }
     }
 
+    // Correct capture counter logic:
+    // If black stones were removed, black stones were captured.
+    // If white stones were removed, white stones were captured.
     if color == Black {
-        b.CapturedWhite += count
-    } else {
         b.CapturedBlack += count
+    } else if color == White {
+        b.CapturedWhite += count
     }
+
+    diag("Removed group: color=%s count=%d", color, count)
+}
+
+func (b *Board) CountStones() (black, white int) {
+    for y := 0; y < boardSize; y++ {
+        for x := 0; x < boardSize; x++ {
+            switch b.Grid[y][x] {
+            case Black:
+                black++
+            case White:
+                white++
+            }
+        }
+    }
+    return black, white
 }
 
 func inBounds(x, y int) bool {
@@ -186,11 +380,14 @@ func inBounds(x, y int) bool {
 ////////////////////////////////////////////////////////////////////////////////
 // RENDER
 
-func render(board Board, moves []Move, moveNum int,
+func render(
+    board Board,
+    moves []Move,
+    moveNum int,
     gridThickness int,
     bgName, boardName, whiteName, blackName string,
-    highlightMode string) *image.RGBA {
-
+    highlightMode string,
+) *image.RGBA {
     img := image.NewRGBA(image.Rect(0, 0, imgW, imgH))
 
     bg := palette[bgName]
@@ -205,8 +402,15 @@ func render(board Board, moves []Move, moveNum int,
     cell := targetBoardPx / (boardSize - 1)
     boardPx := cell * (boardSize - 1)
 
-    offsetX := (imgW-boardPx)/2
+    offsetX := (imgW - boardPx) / 2
     offsetY := margin
+
+    diag("Render geometry:")
+    diag("  imgW=%d imgH=%d", imgW, imgH)
+    diag("  margin=%d", margin)
+    diag("  cell=%d", cell)
+    diag("  boardPx=%d", boardPx)
+    diag("  offsetX=%d offsetY=%d", offsetX, offsetY)
 
     fillRect(img, offsetX, offsetY, boardPx, boardPx, boardCol)
 
@@ -222,7 +426,9 @@ func render(board Board, moves []Move, moveNum int,
 
     r := cell/2 - 3
 
-    // stones
+    diag("Stone radius=%d", r)
+
+    // Draw board stones.
     for y := 0; y < boardSize; y++ {
         for x := 0; x < boardSize; x++ {
             cx := offsetX + x*cell
@@ -238,21 +444,37 @@ func render(board Board, moves []Move, moveNum int,
         }
     }
 
-    // highlight
+    // Highlight last played move.
     if highlightMode != "none" && moveNum > 0 && moveNum <= len(moves) {
         m := moves[moveNum-1]
         cx := offsetX + m.X*cell
         cy := offsetY + m.Y*cell
+
+        diag(
+            "Highlighting move %d: %s at board(%d,%d), pixel(%d,%d)",
+            moveNum,
+            m.Color,
+            m.X,
+            m.Y,
+            cx,
+            cy,
+        )
 
         if highlightMode == "dot" {
             circle(img, cx, cy, cell/6, palette["red"])
         } else {
             circleOutline(img, cx, cy, cell/2-1, palette["red"])
         }
+    } else {
+        diag(
+            "No highlight drawn: mode=%q moveNum=%d len(moves)=%d",
+            highlightMode,
+            moveNum,
+            len(moves),
+        )
     }
 
-    // ✅ DRAW CAPTURES (NEW)
-    drawCaptureGrids(img, board, offsetX, offsetY, boardPx, r)
+    drawCaptureGrids(img, board, offsetX, offsetY, boardPx, r, whiteCol, blackCol)
 
     return img
 }
@@ -260,30 +482,55 @@ func render(board Board, moves []Move, moveNum int,
 ////////////////////////////////////////////////////////////////////////////////
 // CAPTURE GRIDS
 
-func drawCaptureGrids(img *image.RGBA, b Board, offsetX, offsetY, boardPx, r int) {
-
+func drawCaptureGrids(
+    img *image.RGBA,
+    b Board,
+    offsetX, offsetY, boardPx, r int,
+    whiteCol, blackCol color.RGBA,
+) {
     spacing := r*2 + 4
+
+    if spacing <= 0 {
+        diag("WARNING: invalid capture-grid spacing=%d", spacing)
+        return
+    }
+
+    perCol := boardPx / spacing
+    if perCol < 1 {
+        perCol = 1
+    }
 
     leftX := offsetX - spacing
     rightX := offsetX + boardPx + spacing
-
     topY := offsetY
 
-    perCol := (boardPx / spacing)
+    diag("Capture grid:")
+    diag("  spacing=%d", spacing)
+    diag("  perCol=%d", perCol)
+    diag("  leftX=%d rightX=%d topY=%d", leftX, rightX, topY)
+    diag("  captured white=%d, captured black=%d", b.CapturedWhite, b.CapturedBlack)
 
-    // LEFT = captured white (display as black stones)
+    // LEFT SIDE:
+    // Captured white stones are displayed one by one in a vertical grid.
     for i := 0; i < b.CapturedWhite; i++ {
         x := leftX - (i/perCol)*spacing
         y := topY + (i%perCol)*spacing
-        circle(img, x, y, r/2, palette["black"])
+
+        diag("  captured white stone %d at pixel(%d,%d)", i+1, x, y)
+
+        circle(img, x, y, r/2, whiteCol)
+        circleOutline(img, x, y, r/2, palette["black"])
     }
 
-    // RIGHT = captured black (display as white/green/etc stones)
+    // RIGHT SIDE:
+    // Captured black stones are displayed one by one in a vertical grid.
     for i := 0; i < b.CapturedBlack; i++ {
         x := rightX + (i/perCol)*spacing
         y := topY + (i%perCol)*spacing
-        circle(img, x, y, r/2, palette["white"])
-        circleOutline(img, x, y, r/2, palette["black"])
+
+        diag("  captured black stone %d at pixel(%d,%d)", i+1, x, y)
+
+        circle(img, x, y, r/2, blackCol)
     }
 }
 
@@ -293,7 +540,7 @@ func drawCaptureGrids(img *image.RGBA, b Board, offsetX, offsetY, boardPx, r int
 func fill(img *image.RGBA, c color.RGBA) {
     for y := 0; y < imgH; y++ {
         for x := 0; x < imgW; x++ {
-            img.Set(x, y, c)
+            safeSet(img, x, y, c)
         }
     }
 }
@@ -301,43 +548,81 @@ func fill(img *image.RGBA, c color.RGBA) {
 func fillRect(img *image.RGBA, x, y, w, h int, c color.RGBA) {
     for yy := y; yy < y+h; yy++ {
         for xx := x; xx < x+w; xx++ {
-            img.Set(xx, yy, c)
+            safeSet(img, xx, yy, c)
         }
     }
 }
 
 func drawLine(img *image.RGBA, x0, y0, x1, y1 int, c color.RGBA, t int) {
-    for d := -t/2; d <= t/2; d++ {
+    if t < 1 {
+        t = 1
+    }
+
+    for d := -t / 2; d <= t/2; d++ {
         if x0 == x1 {
             for y := y0; y <= y1; y++ {
-                img.Set(x0+d, y, c)
+                safeSet(img, x0+d, y, c)
             }
         } else {
             for x := x0; x <= x1; x++ {
-                img.Set(x, y0+d, c)
+                safeSet(img, x, y0+d, c)
             }
         }
     }
 }
 
 func circle(img *image.RGBA, cx, cy, r int, col color.RGBA) {
+    if r <= 0 {
+        return
+    }
+
     for dy := -r; dy <= r; dy++ {
         for dx := -r; dx <= r; dx++ {
             if dx*dx+dy*dy <= r*r {
-                img.Set(cx+dx, cy+dy, col)
+                safeSet(img, cx+dx, cy+dy, col)
             }
         }
     }
 }
 
 func circleOutline(img *image.RGBA, cx, cy, r int, col color.RGBA) {
+    if r <= 1 {
+        return
+    }
+
     for dy := -r; dy <= r; dy++ {
         for dx := -r; dx <= r; dx++ {
             d2 := dx*dx + dy*dy
             if d2 <= r*r && d2 >= (r-1)*(r-1) {
-                img.Set(cx+dx, cy+dy, col)
+                safeSet(img, cx+dx, cy+dy, col)
             }
         }
     }
 }
 
+func safeSet(img *image.RGBA, x, y int, c color.RGBA) {
+    if x < 0 || y < 0 || x >= imgW || y >= imgH {
+        return
+    }
+
+    img.Set(x, y, c)
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// OPTIONAL BOARD DUMP
+
+func dumpBoard(b Board) {
+    if !debug {
+        return
+    }
+
+    for y := 0; y < boardSize; y++ {
+        var row strings.Builder
+
+        for x := 0; x < boardSize; x++ {
+            row.WriteString(fmt.Sprintf("%s ", b.Grid[y][x]))
+        }
+
+        log.Print(row.String())
+    }
+}

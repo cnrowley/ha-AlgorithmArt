@@ -17,6 +17,8 @@ export FRACTAL_CMD
 export GOBAN_CMD
 export DISPLAY_WIDTH
 export DISPLAY_HEIGHT
+PHOTOFRAME_HOST=$(bashio::config 'photoframe_host')
+export PHOTOFRAME_HOST
 export STATE_DIR="/data/state"
 
 mkdir -p /data/state
