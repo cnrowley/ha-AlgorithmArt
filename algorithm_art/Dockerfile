@@ -1,38 +1,66 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/base:latest
 FROM ${BUILD_FROM}
 
-# Install Python and runtime deps
+# Install build and runtime dependencies
 RUN apk add --no-cache \
     python3 \
     py3-pip \
-    ca-certificates
+    ca-certificates \
+    go \
+    git \
+    build-base
 
-RUN pip3 install --no-cache-dir --break-system-packages flask requests
+RUN pip3 install --no-cache-dir --break-system-packages \
+    flask \
+    requests
 
-# ── Generator binaries ─────────────────────────────────────────────────────
-# Each binary lives in its own subdirectory under bin/ in the repo.
-# We copy just the executable (not the source or test output files).
-COPY bin/dla/dla.x           /usr/local/bin/dla.x
-COPY bin/fractal/fractalgen.x /usr/local/bin/fractalgen.x
-COPY bin/goban/goban.x       /usr/local/bin/goban.x
+# ------------------------------------------------------------------
+# Build Go generators
+# ------------------------------------------------------------------
+
+# DLA
+COPY src/dla /tmp/src/dla
+RUN cd /tmp/src/dla && \
+    go build -o /usr/local/bin/dla.x
+
+# Fractal
+COPY src/fractal /tmp/src/fractal
+RUN cd /tmp/src/fractal && \
+    go build -o /usr/local/bin/fractalgen.x
+
+# Goban
+COPY src/goban /tmp/src/goban
+RUN cd /tmp/src/goban && \
+    go build -o /usr/local/bin/goban.x
+
 RUN chmod +x \
     /usr/local/bin/dla.x \
     /usr/local/bin/fractalgen.x \
     /usr/local/bin/goban.x
 
-# Flask app and supporting modules — flat in repo root
-WORKDIR /app
-COPY main.py           /app/main.py
-COPY art_generator.py  /app/art_generator.py
-COPY goban_state.py    /app/goban_state.py
-COPY web_ui.py         /app/web_ui.py
+# ------------------------------------------------------------------
+# Python application
+# ------------------------------------------------------------------
 
-# SGF game library — copied from data/go_sgf in the repo
-# The directory will be at /data/go_sgf in the container
+WORKDIR /app
+
+COPY main.py          /app/main.py
+COPY art_generator.py /app/art_generator.py
+COPY goban_state.py   /app/goban_state.py
+COPY web_ui.py        /app/web_ui.py
+
+# ------------------------------------------------------------------
+# SGF library
+# ------------------------------------------------------------------
+
 COPY data/go_sgf /data/go_sgf
 
+# ------------------------------------------------------------------
+# Startup
+# ------------------------------------------------------------------
+
 COPY run.sh /run.sh
-RUN chmod a+x /run.sh
+RUN chmod +x /run.sh
 
 EXPOSE 8765
 
