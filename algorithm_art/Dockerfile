@@ -5,16 +5,21 @@ ARG BUILD_FROM=ghcr.io/home-assistant/base:latest
 # ------------------------------------------------------------------
 FROM golang:1.24-alpine AS builder
 
-WORKDIR /src
+# Build DLA
+WORKDIR /build/dla
+COPY dla/ ./
+RUN go build -o /out/dla.x .
 
-COPY go.mod go.sum ./
-RUN go mod download
+# Build Fractal
+WORKDIR /build/fractal
+COPY fractal/ ./
+RUN go build -o /out/fractalgen.x .
 
-COPY . .
-
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/dla.x ./bin/dla && \
-    CGO_ENABLED=0 GOOS=linux go build -o /out/fractalgen.x ./bin/fractal && \
-    CGO_ENABLED=0 GOOS=linux go build -o /out/goban.x ./bin/goban
+# Build Goban
+WORKDIR /build/goban
+COPY goban/ ./
+RUN go mod download && \
+    go build -o /out/goban.x .
 
 # ------------------------------------------------------------------
 # Runtime image
@@ -29,10 +34,10 @@ RUN apk add --no-cache \
 
 RUN pip3 install --no-cache-dir --break-system-packages flask requests
 
-# Copy compiled Go binaries
-COPY --from=builder /out/dla.x /usr/local/bin/dla.x
+# Go binaries built above
+COPY --from=builder /out/dla.x        /usr/local/bin/dla.x
 COPY --from=builder /out/fractalgen.x /usr/local/bin/fractalgen.x
-COPY --from=builder /out/goban.x /usr/local/bin/goban.x
+COPY --from=builder /out/goban.x      /usr/local/bin/goban.x
 
 RUN chmod +x \
     /usr/local/bin/dla.x \
