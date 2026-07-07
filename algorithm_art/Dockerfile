@@ -5,22 +5,17 @@ ARG BUILD_FROM=ghcr.io/home-assistant/base:latest
 # ------------------------------------------------------------------
 FROM golang:1.24-alpine AS builder
 
-# Build DLA
 WORKDIR /build/dla
-COPY dla/ ./
+COPY src/dla/ ./
 RUN go build -o /out/dla.x .
 
-# Build Fractal
 WORKDIR /build/fractal
-COPY fractal/ ./
+COPY src/fractal/ ./
 RUN go build -o /out/fractalgen.x .
 
-# Build Goban
 WORKDIR /build/goban
-COPY goban/ ./
-RUN go mod download && \
-    go build -o /out/goban.x .
-
+COPY src/goban/ ./
+RUN go mod download && go build -o /out/goban.x .
 # ------------------------------------------------------------------
 # Runtime image
 # ------------------------------------------------------------------
