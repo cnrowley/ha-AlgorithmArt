@@ -37,7 +37,8 @@ _LOGGER = logging.getLogger("algorithm_art.goban_state")
 # Where game files live inside the container.
 # Static assets belong under /app so they are not hidden by HA's /data mount.
 #SGF_DIR = Path(os.environ.get("SGF_DIR", "/app/go_sgf"))
-SGF_DIR="/app/go_sgf"
+SGF_DIR=Path("/app/go_sgf")
+
 
 STATE_FILE = Path("/data/state/goban_state.json")
 DIR_FILE = Path("/app/go_sgf/sgf_directory.py")
