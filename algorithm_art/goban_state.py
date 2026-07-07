@@ -40,7 +40,7 @@ _LOGGER = logging.getLogger("algorithm_art.goban_state")
 SGF_DIR="/app/go_sgf"
 
 STATE_FILE = Path("/data/state/goban_state.json")
-DIR_FILE = SGF_DIR / "sgf_directory.py"
+DIR_FILE = Path("/app/go_sgf/sgf_directory.py")
 
 # How many moves to advance per Generate press (1 = step-by-step)
 MOVES_PER_FRAME = 1
