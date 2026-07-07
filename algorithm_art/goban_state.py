@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import re
 from pathlib import Path
@@ -33,10 +34,12 @@ from typing import Any
 
 _LOGGER = logging.getLogger("algorithm_art.goban_state")
 
-# Where game files live inside the container
-SGF_DIR     = Path("/data/go_sgf")
-STATE_FILE  = Path("/data/state/goban_state.json")
-DIR_FILE    = SGF_DIR / "sgf_directory.py"
+# Where game files live inside the container.
+# The Dockerfile copies data/go_sgf → /data/go_sgf
+# The HA add-on maps the "data" volume to /data
+SGF_DIR    = Path(os.environ.get("SGF_DIR", "/data/go_sgf"))
+STATE_FILE = Path("/data/state/goban_state.json")
+DIR_FILE   = SGF_DIR / "sgf_directory.py"
 
 # How many moves to advance per Generate press (1 = step-by-step)
 MOVES_PER_FRAME = 1
@@ -57,17 +60,30 @@ def _count_moves(sgf_text: str) -> int:
 
 def _load_directory() -> list[dict]:
     """Load SGF_FILES from sgf_directory.py via exec."""
+    _LOGGER.info("Looking for SGF directory at: %s", SGF_DIR)
+    _LOGGER.info("SGF_DIR exists: %s", SGF_DIR.exists())
+    if SGF_DIR.exists():
+        contents = list(SGF_DIR.iterdir())
+        _LOGGER.info("SGF_DIR contents (%d items): %s",
+                     len(contents), [p.name for p in contents[:10]])
+
     if not DIR_FILE.exists():
-        _LOGGER.warning("sgf_directory.py not found at %s", DIR_FILE)
+        _LOGGER.warning(
+            "sgf_directory.py not found at %s — "
+            "check that data/go_sgf/ was copied correctly in the Dockerfile "
+            "and the container's /data volume is mounted.",
+            DIR_FILE,
+        )
         return []
+
     namespace: dict[str, Any] = {}
     try:
         exec(DIR_FILE.read_text(encoding="utf-8"), namespace)  # noqa: S102
         files = namespace.get("SGF_FILES", [])
-        _LOGGER.info("Loaded %d games from sgf_directory.py", len(files))
+        _LOGGER.info("Loaded %d games from %s", len(files), DIR_FILE)
         return files
     except Exception as exc:
-        _LOGGER.error("Failed to load sgf_directory.py: %s", exc)
+        _LOGGER.error("Failed to exec sgf_directory.py: %s", exc)
         return []
 
 

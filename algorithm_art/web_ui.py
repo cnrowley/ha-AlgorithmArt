@@ -1,9 +1,4 @@
-"""AlgorithmArt Web UI — Flask blueprint.
-
-Serves the full management interface at http://<addon-ip>:8765/ui
-All actions call the same JSON API endpoints used by the HA integration,
-so the UI and HA are always in sync.
-"""
+"""AlgorithmArt Web UI — Flask blueprint serving the management dashboard."""
 
 from __future__ import annotations
 
@@ -11,743 +6,775 @@ from flask import Blueprint, render_template_string
 
 ui = Blueprint("ui", __name__)
 
-# ── Colour options (must match fractalgen.go and goban.go) ─────────────────
-FRACTAL_COLOURS = ["black", "white", "green", "blue", "red", "yellow", "orange"]
-GOBAN_BG        = ["white", "black"]
-GOBAN_BOARD     = ["yellow", "white"]
-GOBAN_WHITE     = ["white", "green", "blue", "red"]
-GOBAN_BLACK     = ["black", "red"]
-GOBAN_HIGHLIGHT = ["ring", "dot", "none"]
-
-_HTML = r"""
-<!DOCTYPE html>
+_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AlgorithmArt</title>
 <style>
-  :root {
-    --bg: #0f1117; --surface: #1a1d27; --surface2: #22263a;
-    --border: #2e3350; --accent: #6c8ef5; --accent2: #a78bfa;
-    --green: #34d399; --red: #f87171; --yellow: #fbbf24;
-    --text: #e2e8f0; --muted: #64748b;
-    --radius: 10px; --gap: 16px;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif;
-         font-size: 14px; min-height: 100vh; }
+:root{
+  --bg:#0f1117;--sur:#1a1d27;--sur2:#22263a;--brd:#2e3350;
+  --acc:#6c8ef5;--acc2:#a78bfa;--grn:#34d399;--red:#f87171;
+  --yel:#fbbf24;--txt:#e2e8f0;--mut:#64748b;
+  --r:10px;--gap:16px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:system-ui,sans-serif;font-size:14px}
 
-  /* ── Layout ── */
-  header { background: var(--surface); border-bottom: 1px solid var(--border);
-           padding: 14px 24px; display: flex; align-items: center; gap: 12px; }
-  header h1 { font-size: 18px; font-weight: 700; letter-spacing: .5px; }
-  header .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
-  header .dot.ok { background: var(--green); }
-  header .dot.err { background: var(--red); }
-  .container { max-width: 1100px; margin: 0 auto; padding: 24px; display: grid;
-               grid-template-columns: 260px 1fr; gap: var(--gap); }
-  @media(max-width:700px){ .container{ grid-template-columns:1fr; } }
+/* ── Layout ── */
+header{background:var(--sur);border-bottom:1px solid var(--brd);
+  padding:14px 24px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:100}
+header h1{font-size:18px;font-weight:700}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--mut);flex-shrink:0}
+.dot.ok{background:var(--grn)}.dot.err{background:var(--red)}
+.container{max-width:1120px;margin:0 auto;padding:20px;display:grid;
+  grid-template-columns:240px 1fr;gap:var(--gap)}
+@media(max-width:700px){.container{grid-template-columns:1fr}}
 
-  /* ── Sidebar ── */
-  .sidebar { display: flex; flex-direction: column; gap: var(--gap); }
-  .mode-btn { display: flex; align-items: center; gap: 10px; padding: 12px 16px;
-              background: var(--surface); border: 1px solid var(--border);
-              border-radius: var(--radius); cursor: pointer; color: var(--text);
-              font-size: 14px; font-weight: 500; transition: all .15s; width: 100%; }
-  .mode-btn:hover, .mode-btn.active { border-color: var(--accent);
-                                       background: var(--surface2); }
-  .mode-btn .icon { font-size: 20px; width: 28px; text-align: center; }
-  .mode-btn.active .label { color: var(--accent); }
+/* ── Sidebar ── */
+.sidebar{display:flex;flex-direction:column;gap:10px}
+.tab-btn{display:flex;align-items:center;gap:10px;padding:11px 14px;
+  background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);
+  cursor:pointer;color:var(--txt);font-size:13px;font-weight:500;
+  transition:all .15s;width:100%;text-align:left}
+.tab-btn:hover,.tab-btn.active{border-color:var(--acc);background:var(--sur2)}
+.tab-btn.active .tlabel{color:var(--acc)}
+.tab-btn .icon{font-size:18px;width:24px;text-align:center}
 
-  .status-card { background: var(--surface); border: 1px solid var(--border);
-                 border-radius: var(--radius); padding: 16px; }
-  .status-card h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
-                    color: var(--muted); margin-bottom: 12px; }
-  .stat { display: flex; justify-content: space-between; align-items: center;
-          padding: 4px 0; border-bottom: 1px solid var(--border); }
-  .stat:last-child { border: none; }
-  .stat .key { color: var(--muted); font-size: 12px; }
-  .stat .val { font-weight: 600; font-size: 13px; }
+/* ── Status card ── */
+.sc{background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);padding:14px}
+.sc h3{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:10px}
+.st{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--brd)}
+.st:last-child{border:none}
+.sk{color:var(--mut);font-size:12px}.sv{font-weight:600;font-size:12px;text-align:right;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-  /* ── Main panel ── */
-  .main { display: flex; flex-direction: column; gap: var(--gap); }
-  .card { background: var(--surface); border: 1px solid var(--border);
-          border-radius: var(--radius); padding: 20px; }
-  .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 16px;
-             padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-  .panel { display: none; flex-direction: column; gap: var(--gap); }
-  .panel.active { display: flex; }
+/* ── Scheduler card ── */
+.sch-card{background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);padding:14px}
+.sch-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.sch-header h3{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--mut)}
+.toggle{position:relative;display:inline-flex;cursor:pointer}
+.toggle input{opacity:0;width:0;height:0}
+.slider{position:relative;display:inline-block;width:40px;height:22px;
+  background:var(--brd);border-radius:22px;transition:.3s}
+.slider:before{content:'';position:absolute;width:16px;height:16px;
+  background:#fff;border-radius:50%;top:3px;left:3px;transition:.3s}
+input:checked+.slider{background:var(--acc)}
+input:checked+.slider:before{transform:translateX(18px)}
+.countdown{font-size:22px;font-weight:700;color:var(--acc);text-align:center;
+  padding:6px 0;letter-spacing:1px}
+.countdown.inactive{color:var(--mut);font-size:14px}
 
-  /* ── Form elements ── */
-  .row { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px,1fr)); gap: 12px; }
-  .field { display: flex; flex-direction: column; gap: 6px; }
-  label { font-size: 12px; color: var(--muted); font-weight: 500; }
-  select, input[type=number], input[type=text] {
-    background: var(--surface2); border: 1px solid var(--border);
-    border-radius: 6px; padding: 8px 10px; color: var(--text);
-    font-size: 13px; width: 100%; }
-  select:focus, input:focus { outline: none; border-color: var(--accent); }
+/* ── Main panels ── */
+.main{display:flex;flex-direction:column;gap:var(--gap)}
+.panel{display:none;flex-direction:column;gap:var(--gap)}
+.panel.active{display:flex}
+.card{background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);padding:20px}
+.card h2{font-size:15px;font-weight:600;margin-bottom:16px;
+  padding-bottom:10px;border-bottom:1px solid var(--brd);display:flex;align-items:center;gap:8px}
 
-  /* ── Colour swatches ── */
-  .swatch-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .swatch { width: 32px; height: 32px; border-radius: 6px; cursor: pointer;
-            border: 2px solid transparent; transition: all .15s; }
-  .swatch:hover { transform: scale(1.1); }
-  .swatch.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
-  .swatch.black  { background: #111; }
-  .swatch.white  { background: #f0f0f0; }
-  .swatch.green  { background: #22c55e; }
-  .swatch.blue   { background: #3b82f6; }
-  .swatch.red    { background: #ef4444; }
-  .swatch.yellow { background: #eab308; }
-  .swatch.orange { background: #f97316; }
+/* ── Generate bar ── */
+.gen-bar{background:var(--sur2);border:1px solid var(--brd);border-radius:var(--r);
+  padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.gen-info strong{display:block;font-size:14px;margin-bottom:2px}
+.gen-info span{font-size:12px;color:var(--mut)}
 
-  /* ── Buttons ── */
-  .btn { padding: 9px 18px; border-radius: 7px; border: none; cursor: pointer;
-         font-size: 13px; font-weight: 600; transition: all .15s; }
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover { filter: brightness(1.15); }
-  .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
-  .btn-secondary { background: var(--surface2); color: var(--text);
-                   border: 1px solid var(--border); }
-  .btn-secondary:hover { border-color: var(--accent); }
-  .btn-danger { background: var(--red); color: #fff; }
-  .btn-danger:hover { filter: brightness(1.15); }
-  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
+/* ── Forms ── */
+.row{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+.field{display:flex;flex-direction:column;gap:5px}
+label{font-size:11px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+select,input[type=number],input[type=text]{
+  background:var(--sur2);border:1px solid var(--brd);border-radius:6px;
+  padding:8px 10px;color:var(--txt);font-size:13px;width:100%}
+select:focus,input:focus{outline:none;border-color:var(--acc)}
+.interval-row{display:flex;gap:8px}
+.interval-row input[type=number]{flex:1}
+.interval-row select{flex:1}
 
-  /* ── Progress bar ── */
-  .progress-wrap { background: var(--surface2); border-radius: 20px;
-                   height: 8px; overflow: hidden; }
-  .progress-bar  { height: 100%; border-radius: 20px;
-                   background: linear-gradient(90deg, var(--accent), var(--accent2));
-                   transition: width .4s ease; }
-  .progress-label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+/* ── Colour swatches ── */
+.swatches{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+.sw{width:30px;height:30px;border-radius:6px;cursor:pointer;
+  border:2px solid transparent;transition:all .15s;flex-shrink:0}
+.sw:hover{transform:scale(1.1)}
+.sw.sel{border-color:var(--acc);box-shadow:0 0 0 2px var(--acc)}
+.sw.black{background:#111}.sw.white{background:#f0f0f0}.sw.green{background:#22c55e}
+.sw.blue{background:#3b82f6}.sw.red{background:#ef4444}.sw.yellow{background:#eab308}
+.sw.orange{background:#f97316}
 
-  /* ── Game table ── */
-  .search-bar { width: 100%; margin-bottom: 12px; }
-  .game-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  .game-table th { text-align: left; color: var(--muted); font-weight: 500;
-                   padding: 6px 8px; border-bottom: 1px solid var(--border);
-                   position: sticky; top: 0; background: var(--surface); }
-  .game-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  .game-table tr:hover td { background: var(--surface2); }
-  .game-table tr.current td { background: color-mix(in srgb, var(--accent) 15%, transparent); }
-  .game-table .pick-btn { padding: 3px 10px; font-size: 11px; }
-  .table-wrap { max-height: 320px; overflow-y: auto; border: 1px solid var(--border);
-                border-radius: 6px; }
+/* ── Buttons ── */
+.btn{padding:8px 16px;border-radius:7px;border:none;cursor:pointer;
+  font-size:13px;font-weight:600;transition:all .15s;display:inline-flex;
+  align-items:center;gap:6px}
+.bp{background:var(--acc);color:#fff}.bp:hover{filter:brightness(1.15)}
+.bp:disabled{opacity:.4;cursor:not-allowed}
+.bs{background:var(--sur2);color:var(--txt);border:1px solid var(--brd)}
+.bs:hover{border-color:var(--acc)}
+.bd{background:var(--red);color:#fff}.bd:hover{filter:brightness(1.15)}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap}
 
-  /* ── Toast ── */
-  #toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface2);
-           border: 1px solid var(--border); border-radius: var(--radius);
-           padding: 12px 18px; font-size: 13px; opacity: 0; pointer-events: none;
-           transition: opacity .3s; z-index: 999; }
-  #toast.show { opacity: 1; }
-  #toast.ok  { border-color: var(--green); }
-  #toast.err { border-color: var(--red); }
+/* ── Progress ── */
+.prog-wrap{background:var(--sur2);border-radius:20px;height:7px;overflow:hidden;margin-top:4px}
+.prog-bar{height:100%;border-radius:20px;
+  background:linear-gradient(90deg,var(--acc),var(--acc2));transition:width .4s}
 
-  /* ── Generate banner ── */
-  .gen-banner { background: var(--surface2); border: 1px solid var(--border);
-                border-radius: var(--radius); padding: 16px 20px;
-                display: flex; align-items: center; justify-content: space-between;
-                gap: 12px; }
-  .gen-banner .gen-info { font-size: 12px; color: var(--muted); }
-  .gen-banner .gen-info strong { color: var(--text); display: block; font-size: 14px; }
-  #gen-btn { font-size: 15px; padding: 12px 28px; min-width: 160px; }
+/* ── Game table ── */
+.tsearch{width:100%;margin-bottom:10px}
+.twrap{max-height:300px;overflow-y:auto;border:1px solid var(--brd);border-radius:6px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;color:var(--mut);padding:6px 8px;
+  border-bottom:1px solid var(--brd);position:sticky;top:0;background:var(--sur);font-size:11px}
+td{padding:5px 8px;border-bottom:1px solid var(--brd)}
+tr:hover td{background:var(--sur2)}
+tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
+.play-btn{padding:2px 9px;font-size:11px}
+
+/* ── Toast ── */
+#toast{position:fixed;bottom:20px;right:20px;background:var(--sur2);
+  border:1px solid var(--brd);border-radius:var(--r);padding:10px 16px;
+  font-size:13px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:999}
+#toast.show{opacity:1}
+#toast.ok{border-color:var(--grn)}#toast.err{border-color:var(--red)}
 </style>
 </head>
 <body>
 
 <header>
-  <div class="dot" id="health-dot"></div>
+  <div class="dot" id="hdot"></div>
   <h1>⬡ AlgorithmArt</h1>
-  <span id="health-text" style="font-size:12px;color:var(--muted)">checking…</span>
+  <span id="htxt" style="font-size:12px;color:var(--mut)">checking…</span>
+  <span style="flex:1"></span>
+  <span id="gen-active-badge" style="font-size:11px;background:var(--sur2);
+    border:1px solid var(--brd);padding:3px 10px;border-radius:20px;color:var(--acc)">—</span>
 </header>
 
 <div class="container">
+<!-- ── SIDEBAR ─────────────────────────────────────────────────────────── -->
+<aside class="sidebar">
+  <button class="tab-btn active" data-tab="dla" onclick="switchTab('dla',this)">
+    <span class="icon">🌿</span><span class="tlabel">DLA</span></button>
+  <button class="tab-btn" data-tab="fractal" onclick="switchTab('fractal',this)">
+    <span class="icon">∞</span><span class="tlabel">Fractal</span></button>
+  <button class="tab-btn" data-tab="goban" onclick="switchTab('goban',this)">
+    <span class="icon">⬡</span><span class="tlabel">Go / Goban</span></button>
 
-  <!-- Sidebar -->
-  <aside class="sidebar">
-    <button class="mode-btn active" data-panel="dashboard" onclick="switchPanel('dashboard',this)">
-      <span class="icon">🏠</span><span class="label">Dashboard</span>
-    </button>
-    <button class="mode-btn" data-panel="dla" onclick="switchPanel('dla',this)">
-      <span class="icon">🌿</span><span class="label">DLA</span>
-    </button>
-    <button class="mode-btn" data-panel="fractal" onclick="switchPanel('fractal',this)">
-      <span class="icon">∞</span><span class="label">Fractal</span>
-    </button>
-    <button class="mode-btn" data-panel="goban" onclick="switchPanel('goban',this)">
-      <span class="icon">⬡</span><span class="label">Go / Goban</span>
-    </button>
-
-    <div class="status-card" id="status-card">
-      <h3>Current State</h3>
-      <div class="stat"><span class="key">Source</span><span class="val" id="s-source">—</span></div>
-      <div class="stat"><span class="key">Art type</span><span class="val" id="s-arttype">—</span></div>
-      <div class="stat"><span class="key">DLA frame</span><span class="val" id="s-dlaframe">—</span></div>
-      <div class="stat"><span class="key">Fractal mode</span><span class="val" id="s-fracmode">—</span></div>
-      <div class="stat"><span class="key">Go game</span><span class="val" id="s-gogame" style="font-size:11px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</span></div>
-      <div class="stat"><span class="key">Move</span><span class="val" id="s-move">—</span></div>
+  <!-- Scheduler -->
+  <div class="sch-card">
+    <div class="sch-header">
+      <h3>Auto-refresh</h3>
+      <label class="toggle">
+        <input type="checkbox" id="sch-toggle" onchange="toggleScheduler(this.checked)">
+        <span class="slider"></span>
+      </label>
     </div>
-  </aside>
-
-  <!-- Main content -->
-  <main class="main">
-
-    <!-- Generate banner (always visible) -->
-    <div class="gen-banner">
-      <div class="gen-info">
-        <strong id="gen-label">Generate &amp; Display</strong>
-        <span id="gen-sublabel">Press to push next image to PhotoPainter</span>
-      </div>
-      <button class="btn btn-primary" id="gen-btn" onclick="generate()">▶ Generate</button>
-    </div>
-
-    <!-- Dashboard -->
-    <div class="panel active" id="panel-dashboard">
-      <div class="card">
-        <h2>Quick status</h2>
-        <div id="dash-content" style="color:var(--muted);font-size:13px">Loading…</div>
+    <div class="field" style="margin-bottom:10px">
+      <label>Interval</label>
+      <div class="interval-row">
+        <input type="number" id="sch-interval" min="10" value="300"
+          placeholder="seconds" onchange="schedSave()">
+        <select id="sch-preset" onchange="applyPreset(this.value)">
+          <option value="">Pick…</option>
+          <!-- filled by JS from /status -->
+        </select>
       </div>
     </div>
+    <div class="field" style="margin-bottom:10px">
+      <label>Frames per update</label>
+      <input type="number" id="sch-fpu" min="1" max="50" value="1"
+        onchange="schedSave()">
+    </div>
+    <div id="countdown" class="countdown inactive">Stopped</div>
+    <div style="font-size:10px;color:var(--mut);margin-top:4px;text-align:center"
+         id="last-fire-lbl"></div>
+    <div style="margin-top:10px">
+      <button class="btn bp" style="width:100%" onclick="triggerNow()">▶ Fire now</button>
+    </div>
+  </div>
 
-    <!-- DLA panel -->
-    <div class="panel" id="panel-dla">
-      <div class="card">
-        <h2>🌿 DLA — Diffusion-Limited Aggregation</h2>
-        <p style="color:var(--muted);font-size:12px;margin-bottom:16px">
-          Each Generate press advances one frame in a 120-frame sequence.
-          The cluster grows organically from a seed particle.
-        </p>
-        <div style="margin-bottom:16px">
-          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-            <label>Sequence progress</label>
-            <span id="dla-frame-label" style="font-size:12px;color:var(--muted)">frame 1 / 120</span>
+  <!-- Live status -->
+  <div class="sc">
+    <h3>Live state</h3>
+    <div class="st"><span class="sk">Generator</span><span class="sv" id="ss-gen">—</span></div>
+    <div class="st"><span class="sk">DLA frame</span><span class="sv" id="ss-dlaframe">—</span></div>
+    <div class="st"><span class="sk">Fractal zoom</span><span class="sv" id="ss-fzoom">—</span></div>
+    <div class="st"><span class="sk">Go game</span><span class="sv" id="ss-game">—</span></div>
+    <div class="st"><span class="sk">Go move</span><span class="sv" id="ss-move">—</span></div>
+    <div class="st"><span class="sk">Last push</span><span class="sv" id="ss-last">—</span></div>
+  </div>
+</aside>
+
+<!-- ── MAIN ────────────────────────────────────────────────────────────── -->
+<main class="main">
+
+  <!-- Generate bar (always visible) -->
+  <div class="gen-bar">
+    <div class="gen-info">
+      <strong id="gen-label">Generate &amp; Push</strong>
+      <span id="gen-sub">Select a generator in the sidebar</span>
+    </div>
+    <button class="btn bp" id="gen-btn" style="font-size:15px;padding:12px 28px"
+            onclick="generateNow()">▶ Generate</button>
+  </div>
+
+  <!-- ── DLA panel ── -->
+  <div class="panel active" id="tab-dla">
+    <div class="card">
+      <h2>🌿 DLA — Diffusion-Limited Aggregation</h2>
+      <p style="color:var(--mut);font-size:12px;margin-bottom:16px">
+        Particles randomly walk until they stick to the cluster.
+        Each Generate press advances the sequence one frame.
+      </p>
+      <div class="row" style="margin-bottom:16px">
+        <div class="field">
+          <label>Walkers (particles per step)</label>
+          <input type="number" id="dla-walkers" min="1" max="50" value="5"
+            onchange="schedSave()">
+        </div>
+      </div>
+      <div style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <label>Sequence progress</label>
+          <span id="dla-frame-lbl" style="font-size:12px;color:var(--mut)">frame 1 / 120</span>
+        </div>
+        <div class="prog-wrap"><div class="prog-bar" id="dla-prog" style="width:0%"></div></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn bs" onclick="dlaReset()">↺ Reset sequence</button>
+        <button class="btn bp" onclick="generateNow()">▶ Generate DLA frame</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Fractal panel ── -->
+  <div class="panel" id="tab-fractal">
+    <div class="card">
+      <h2>∞ Fractal</h2>
+      <div class="row" style="margin-bottom:16px">
+        <div class="field">
+          <label>Mode</label>
+          <select id="frac-mode" onchange="fracSave()">
+            <option value="single">Single frame</option>
+            <option value="zoom_sequence">Zoom sequence</option>
+          </select>
+        </div>
+      </div>
+      <div class="field" style="margin-bottom:14px">
+        <label>Foreground colour</label>
+        <div class="swatches" id="fg-sw"></div>
+        <input type="hidden" id="frac-fg" value="white">
+      </div>
+      <div class="field" style="margin-bottom:14px">
+        <label>Background colour</label>
+        <div class="swatches" id="bg-sw"></div>
+        <input type="hidden" id="frac-bg" value="black">
+      </div>
+      <div id="zoom-info" style="margin-bottom:14px;display:none">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <label>Zoom step</label>
+          <span id="frac-zoom-lbl" style="font-size:12px;color:var(--mut)">step 0</span>
+        </div>
+        <div class="prog-wrap"><div class="prog-bar" id="frac-prog" style="width:5%"></div></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn bs" id="frac-reset-btn" onclick="fractalReset()" style="display:none">↺ Reset zoom</button>
+        <button class="btn bp" onclick="generateNow()">▶ Generate fractal</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Goban panel ── -->
+  <div class="panel" id="tab-goban">
+    <div class="card">
+      <h2>⬡ Go / Goban</h2>
+
+      <!-- Current game -->
+      <div style="background:var(--sur2);border-radius:8px;padding:14px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+          <div>
+            <div style="font-weight:600;margin-bottom:2px" id="cg-name">No game selected</div>
+            <div style="font-size:11px;color:var(--mut)" id="cg-path">—</div>
           </div>
-          <div class="progress-wrap"><div class="progress-bar" id="dla-progress" style="width:0%"></div></div>
+          <span id="cg-badge" style="font-size:10px;padding:3px 8px;border-radius:20px;
+            background:var(--acc);color:#fff">RANDOM</span>
         </div>
-        <div class="btn-row">
-          <button class="btn btn-secondary" onclick="dlaReset()">↺ Reset sequence</button>
-          <button class="btn btn-primary" onclick="setSource('generative','dla');generate()">▶ Generate DLA frame</button>
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <label>Progress</label>
+          <span id="cg-move-lbl" style="font-size:12px;color:var(--mut)">— / —</span>
+        </div>
+        <div class="prog-wrap"><div class="prog-bar" id="cg-prog" style="width:0%"></div></div>
+      </div>
+
+      <!-- Controls -->
+      <div class="row" style="margin-bottom:14px">
+        <div class="field">
+          <label>Game selection</label>
+          <select id="goban-mode" onchange="setGobanMode(this.value)">
+            <option value="random">Random</option>
+            <option value="sequential">Sequential</option>
+            <option value="manual">Manual (pick below)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Jump to move</label>
+          <input type="number" id="goban-move-inp" min="0" value="1">
         </div>
       </div>
-    </div>
 
-    <!-- Fractal panel -->
-    <div class="panel" id="panel-fractal">
-      <div class="card">
-        <h2>∞ Fractal — fractalgen</h2>
-        <div class="row" style="margin-bottom:16px">
-          <div class="field">
-            <label>Mode</label>
-            <select id="frac-mode" onchange="saveFractalSettings()">
-              <option value="single">Single frame</option>
-              <option value="zoom_sequence">Zoom sequence</option>
-            </select>
-          </div>
-        </div>
-        <div class="field" style="margin-bottom:16px">
-          <label>Foreground colour</label>
-          <div class="swatch-row" id="fg-swatches"></div>
-          <input type="hidden" id="frac-fg" value="white">
-        </div>
-        <div class="field" style="margin-bottom:16px">
-          <label>Background colour</label>
-          <div class="swatch-row" id="bg-swatches"></div>
-          <input type="hidden" id="frac-bg" value="black">
-        </div>
-        <div id="zoom-status" style="margin-bottom:16px;display:none">
-          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-            <label>Zoom step</label>
-            <span id="frac-zoom-label" style="font-size:12px;color:var(--muted)">step 0</span>
-          </div>
-          <div class="progress-wrap"><div class="progress-bar" id="frac-progress" style="width:5%"></div></div>
-        </div>
-        <div class="btn-row">
-          <button class="btn btn-secondary" id="frac-reset-btn" onclick="fractalReset()" style="display:none">↺ Reset zoom</button>
-          <button class="btn btn-primary" onclick="setSource('generative','fractal');generate()">▶ Generate fractal</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Goban panel -->
-    <div class="panel" id="panel-goban">
-      <div class="card">
-        <h2>⬡ Go / Goban</h2>
-
-        <!-- Current game info -->
-        <div id="current-game-info" style="background:var(--surface2);border-radius:8px;padding:14px;margin-bottom:16px">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-            <div>
-              <div style="font-weight:600;margin-bottom:2px" id="cg-name">No game selected</div>
-              <div style="font-size:11px;color:var(--muted)" id="cg-path">—</div>
+      <!-- Board style -->
+      <details style="margin-bottom:14px">
+        <summary style="cursor:pointer;font-size:12px;color:var(--mut);padding:6px 0">
+          Board colours &amp; style ▾
+        </summary>
+        <div style="padding-top:12px">
+          <div class="row">
+            <div class="field">
+              <label>Background</label>
+              <select id="goban-bg" onchange="gobanStyleSave()">
+                <option value="white">White</option><option value="black">Black</option>
+              </select>
             </div>
-            <span id="cg-badge" style="font-size:10px;padding:3px 8px;border-radius:20px;background:var(--accent);color:#fff">RANDOM</span>
-          </div>
-          <div style="margin-bottom:6px;display:flex;justify-content:space-between">
-            <label>Move progress</label>
-            <span id="cg-move-label" style="font-size:12px;color:var(--muted)">move — / —</span>
-          </div>
-          <div class="progress-wrap"><div class="progress-bar" id="cg-progress" style="width:0%"></div></div>
-        </div>
-
-        <!-- Selection mode -->
-        <div class="row" style="margin-bottom:16px">
-          <div class="field">
-            <label>Game selection</label>
-            <select id="goban-mode" onchange="setGobanMode(this.value)">
-              <option value="random">Random</option>
-              <option value="sequential">Sequential</option>
-              <option value="manual">Manual (picked below)</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>Jump to move</label>
-            <input type="number" id="goban-move-input" min="0" value="1"
-                   placeholder="move number">
-          </div>
-        </div>
-
-        <!-- Colour / style options -->
-        <details style="margin-bottom:16px">
-          <summary style="cursor:pointer;font-size:12px;color:var(--muted);padding:6px 0">
-            Board colours &amp; style ▾
-          </summary>
-          <div style="padding-top:12px;display:flex;flex-direction:column;gap:12px">
-            <div class="row">
-              <div class="field">
-                <label>Background</label>
-                <select id="goban-bg" onchange="saveGobanStyle()">
-                  <option value="white">White</option>
-                  <option value="black">Black</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>Board colour</label>
-                <select id="goban-board" onchange="saveGobanStyle()">
-                  <option value="yellow">Yellow</option>
-                  <option value="white">White</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>White stones</label>
-                <select id="goban-white" onchange="saveGobanStyle()">
-                  <option value="green">Green</option>
-                  <option value="white">White</option>
-                  <option value="blue">Blue</option>
-                  <option value="red">Red</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>Black stones</label>
-                <select id="goban-black" onchange="saveGobanStyle()">
-                  <option value="black">Black</option>
-                  <option value="red">Red</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>Grid thickness</label>
-                <select id="goban-grid" onchange="saveGobanStyle()">
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>Last-move marker</label>
-                <select id="goban-highlight" onchange="saveGobanStyle()">
-                  <option value="ring">Ring</option>
-                  <option value="dot">Dot</option>
-                  <option value="none">None</option>
-                </select>
-              </div>
+            <div class="field">
+              <label>Board colour</label>
+              <select id="goban-board" onchange="gobanStyleSave()">
+                <option value="yellow">Yellow</option><option value="white">White</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>White stones</label>
+              <select id="goban-white" onchange="gobanStyleSave()">
+                <option value="green">Green</option><option value="white">White</option>
+                <option value="blue">Blue</option><option value="red">Red</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Black stones</label>
+              <select id="goban-black" onchange="gobanStyleSave()">
+                <option value="black">Black</option><option value="red">Red</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Grid thickness</label>
+              <select id="goban-grid" onchange="gobanStyleSave()">
+                <option value="1">1</option><option value="2">2</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Last-move marker</label>
+              <select id="goban-highlight" onchange="gobanStyleSave()">
+                <option value="ring">Ring</option><option value="dot">Dot</option>
+                <option value="none">None</option>
+              </select>
             </div>
           </div>
-        </details>
-
-        <!-- Action buttons -->
-        <div class="btn-row" style="margin-bottom:16px">
-          <button class="btn btn-secondary" onclick="gobanRestart()">↺ Restart game</button>
-          <button class="btn btn-secondary" onclick="gobanSkip()">⏭ Skip to next game</button>
-          <button class="btn btn-secondary" onclick="gobanJumpMove()">⤳ Jump to move</button>
-          <button class="btn btn-primary" onclick="setSource('generative','goban');generate()">▶ Generate frame</button>
         </div>
+      </details>
 
-        <!-- Game library table -->
-        <div style="margin-top:8px">
-          <input class="search-bar" type="text" placeholder="🔍 Search games…" oninput="filterGames(this.value)">
-          <div class="table-wrap">
-            <table class="game-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Game</th>
-                  <th>Folder</th>
-                  <th>Size</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="game-tbody"></tbody>
-            </table>
-          </div>
-          <div id="game-count" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
-        </div>
+      <div class="btn-row" style="margin-bottom:16px">
+        <button class="btn bs" onclick="gobanRestart()">↺ Restart game</button>
+        <button class="btn bs" onclick="gobanSkip()">⏭ Skip game</button>
+        <button class="btn bs" onclick="gobanJumpMove()">⤳ Jump to move</button>
+        <button class="btn bp" onclick="generateNow()">▶ Generate frame</button>
       </div>
-    </div>
 
-  </main>
+      <!-- Game library -->
+      <input class="tsearch" type="text" placeholder="🔍 Search games…"
+        oninput="filterGames(this.value)">
+      <div class="twrap">
+        <table>
+          <thead><tr>
+            <th>#</th><th>Filename</th><th>Collection</th><th>Size</th><th></th>
+          </tr></thead>
+          <tbody id="gtbody"></tbody>
+        </table>
+      </div>
+      <div id="gcnt" style="font-size:11px;color:var(--mut);margin-top:6px"></div>
+    </div>
+  </div>
+
+</main>
 </div>
 
 <div id="toast"></div>
 
 <script>
-// ── State ───────────────────────────────────────────────────────────────────
+// ── State ─────────────────────────────────────────────────────────────────────
+const COLOURS = ['black','white','green','blue','red','yellow','orange'];
 const S = {
-  source: 'generative',
-  artType: 'dla',
-  dlaFrame: 1,
-  fracFg: 'white', fracBg: 'black', fracMode: 'single', fracZoom: 0,
-  gobanMode: 'random',
-  gobanGameId: null, gobanGameName: '', gobanGamePath: '',
-  gobanMove: 1, gobanTotal: 0,
-  gobanBg: 'white', gobanBoard: 'yellow',
-  gobanWhite: 'green', gobanBlack: 'black',
-  gobanGrid: 1, gobanHighlight: 'ring',
-  generating: false,
-  games: [],
-  filteredGames: [],
-  currentGameId: null,
+  activeTab:   'dla',
+  dlaWalkers:  5,
+  fracFg:      'white',
+  fracBg:      'black',
+  fracMode:    'single',
+  fracZoom:    0,
+  gobanMode:   'random',
+  gobanBg:     'white',
+  gobanBoard:  'yellow',
+  gobanWhite:  'green',
+  gobanBlack:  'black',
+  gobanGrid:   1,
+  gobanHighlight: 'ring',
+  games:       [],
+  filtered:    [],
+  currentId:   null,
+  schEnabled:  false,
+  schInterval: 300,
+  nextFireTs:  null,
+  lastFireTs:  null,
 };
+let countdownTimer = null;
 
-// ── Toast ───────────────────────────────────────────────────────────────────
-let toastTimer;
-function toast(msg, type='ok') {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.className = 'show ' + type;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.className = '', 2800);
+// ── Toast ─────────────────────────────────────────────────────────────────────
+let tTimer;
+function toast(msg, type='ok'){
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.className='show '+type;
+  clearTimeout(tTimer); tTimer=setTimeout(()=>el.className='',2800);
 }
 
-// ── Panel switching ─────────────────────────────────────────────────────────
-function switchPanel(name, btn) {
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('panel-' + name).classList.add('active');
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name, btn){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
   btn.classList.add('active');
-  updateGenLabel();
+  S.activeTab = name;
+  updateGenBar();
+  schedSave();   // update active_generator when tab changes
 }
 
-function updateGenLabel() {
-  const labels = {
-    dla:     ['Generate DLA frame',    'Advance the DLA sequence one frame'],
-    fractal: ['Generate fractal',      'Render fractal and push to display'],
-    goban:   ['Generate Go frame',     'Advance the game one move'],
-    dashboard: ['Generate & Display',  'Push next image to PhotoPainter'],
+function updateGenBar(){
+  const labels={
+    dla:    ['Generate DLA frame',    'Advances the DLA sequence one frame'],
+    fractal:['Generate fractal',      'Renders fractal with current settings'],
+    goban:  ['Generate Go frame',     'Advances the game one move'],
   };
-  const panel = document.querySelector('.mode-btn.active')?.dataset.panel || 'dashboard';
-  const [main, sub] = labels[panel] || labels.dashboard;
-  document.getElementById('gen-label').textContent = main;
-  document.getElementById('gen-sublabel').textContent = sub;
+  const [main,sub]=labels[S.activeTab]||['Generate',''];
+  document.getElementById('gen-label').textContent=main;
+  document.getElementById('gen-sub').textContent=sub;
+  document.getElementById('gen-active-badge').textContent=
+    S.activeTab.charAt(0).toUpperCase()+S.activeTab.slice(1);
 }
 
-// ── Health check ─────────────────────────────────────────────────────────────
-async function checkHealth() {
-  try {
-    const r = await fetch('/health');
-    const d = await r.json();
-    const dot = document.getElementById('health-dot');
-    const txt = document.getElementById('health-text');
-    const all = Object.values(d.generators || {}).every(Boolean);
-    dot.className = 'dot ' + (all ? 'ok' : 'err');
-    const gens = Object.entries(d.generators || {})
-      .map(([k,v]) => k + ':' + (v ? '✓' : '✗')).join('  ');
-    txt.textContent = gens;
-  } catch { document.getElementById('health-dot').className = 'dot err'; }
+// ── Health check ──────────────────────────────────────────────────────────────
+async function checkHealth(){
+  try{
+    const d=await(await fetch('/health')).json();
+    const ok=Object.values(d.generators||{}).every(Boolean);
+    document.getElementById('hdot').className='dot '+(ok?'ok':'err');
+    document.getElementById('htxt').textContent=
+      Object.entries(d.generators||{}).map(([k,v])=>k+':'+(v?'✓':'✗')).join('  ');
+  }catch{document.getElementById('hdot').className='dot err';}
 }
 
-// ── Status polling ───────────────────────────────────────────────────────────
-async function pollStatus() {
-  try {
-    const r = await fetch('/status');
-    if (!r.ok) return;
-    const d = await r.json();
+// ── Countdown timer ───────────────────────────────────────────────────────────
+function startCountdown(){
+  clearInterval(countdownTimer);
+  const el=document.getElementById('countdown');
+  const tick=()=>{
+    if(!S.schEnabled||!S.nextFireTs){
+      el.textContent='Stopped'; el.className='countdown inactive'; return;
+    }
+    const secs=Math.max(0,Math.round((new Date(S.nextFireTs)-Date.now())/1000));
+    const m=Math.floor(secs/60), s=secs%60;
+    el.textContent=(m?m+'m ':'')+s+'s';
+    el.className='countdown';
+  };
+  tick();
+  countdownTimer=setInterval(tick,1000);
+}
+
+// ── Status polling ────────────────────────────────────────────────────────────
+async function poll(){
+  try{
+    const d=await(await fetch('/status')).json();
 
     // DLA
-    S.dlaFrame = d.dla?.next_frame || 1;
-    const dlaFrac = (S.dlaFrame - 1) / 120;
-    document.getElementById('dla-progress').style.width = (dlaFrac * 100) + '%';
-    document.getElementById('dla-frame-label').textContent =
-      'frame ' + S.dlaFrame + ' / 120';
+    const dlaf=d.dla?.next_frame||1;
+    document.getElementById('dla-prog').style.width=((dlaf-1)/120*100)+'%';
+    document.getElementById('dla-frame-lbl').textContent=`frame ${dlaf} / 120`;
 
     // Fractal
-    S.fracZoom = d.fractal?.zoom_step || 0;
-    document.getElementById('frac-zoom-label').textContent = 'step ' + S.fracZoom;
-    document.getElementById('frac-progress').style.width =
-      Math.min(S.fracZoom * 5, 95) + '%';
+    const fz=d.fractal?.zoom_step||0;
+    S.fracZoom=fz;
+    document.getElementById('frac-zoom-lbl').textContent='step '+fz;
+    document.getElementById('frac-prog').style.width=Math.min(fz*5,95)+'%';
 
     // Goban
-    const gs = d.goban || {};
-    S.gobanMode     = gs.selection_mode || 'random';
-    S.currentGameId = gs.current_game_id;
-    S.gobanMove     = gs.current_move || 0;
-    S.gobanTotal    = gs.total_moves || 0;
-    S.gobanGameName = gs.game_name || '—';
-    S.gobanGamePath = gs.game_path || '—';
+    const gs=d.goban||{};
+    S.currentId=gs.current_game_id;
+    document.getElementById('goban-mode').value=gs.selection_mode||'random';
+    document.getElementById('cg-name').textContent=gs.game_name||'No game selected';
+    document.getElementById('cg-path').textContent=gs.game_path||'—';
+    document.getElementById('cg-badge').textContent=(gs.selection_mode||'random').toUpperCase();
+    const pct=gs.total_moves>0?Math.round(gs.current_move/gs.total_moves*100):0;
+    document.getElementById('cg-prog').style.width=pct+'%';
+    document.getElementById('cg-move-lbl').textContent=
+      `move ${gs.current_move||0} / ${gs.total_moves||0}`;
+    // Highlight current game in table
+    document.querySelectorAll('#gtbody tr').forEach(tr=>
+      tr.classList.toggle('curr',parseInt(tr.dataset.id)===S.currentId));
 
-    document.getElementById('goban-mode').value = S.gobanMode;
-    document.getElementById('cg-name').textContent = S.gobanGameName;
-    document.getElementById('cg-path').textContent = S.gobanGamePath;
-    document.getElementById('cg-badge').textContent = S.gobanMode.toUpperCase();
-    const pct = S.gobanTotal > 0
-      ? Math.round((S.gobanMove / S.gobanTotal) * 100) : 0;
-    document.getElementById('cg-progress').style.width = pct + '%';
-    document.getElementById('cg-move-label').textContent =
-      'move ' + S.gobanMove + ' / ' + S.gobanTotal;
+    // Scheduler
+    const sch=d.scheduler||{};
+    S.schEnabled=sch.enabled||false;
+    S.schInterval=sch.interval_seconds||300;
+    S.nextFireTs=sch.next_fire||null;
+    S.lastFireTs=sch.last_fire||null;
+    document.getElementById('sch-toggle').checked=S.schEnabled;
+    document.getElementById('sch-interval').value=S.schInterval;
+    document.getElementById('sch-fpu').value=sch.frames_per_update||1;
+    document.getElementById('dla-walkers').value=sch.dla_walkers||5;
+    document.getElementById('last-fire-lbl').textContent=
+      S.lastFireTs ? 'Last: '+new Date(S.lastFireTs).toLocaleTimeString() : '';
+
+    // Restore fractal/goban settings
+    setSwatchSel('fg-sw','frac-fg', sch.fractal_fg||'white');
+    setSwatchSel('bg-sw','frac-bg', sch.fractal_bg||'black');
+    document.getElementById('frac-mode').value=sch.fractal_mode||'single';
+    fracSave();
+    document.getElementById('goban-bg').value=sch.goban_bg||'white';
+    document.getElementById('goban-board').value=sch.goban_board||'yellow';
+    document.getElementById('goban-white').value=sch.goban_white_color||'green';
+    document.getElementById('goban-black').value=sch.goban_black_color||'black';
+    document.getElementById('goban-grid').value=sch.goban_grid_thickness||1;
+    document.getElementById('goban-highlight').value=sch.goban_highlight||'ring';
+
+    // Interval presets dropdown
+    const sel=document.getElementById('sch-preset');
+    if(sel.options.length<=1 && d.interval_presets){
+      d.interval_presets.forEach(p=>{
+        const o=document.createElement('option');
+        o.value=p.seconds; o.textContent=p.label;
+        sel.appendChild(o);
+      });
+    }
 
     // Sidebar stats
-    document.getElementById('s-source').textContent  = d.image_source || '—';
-    document.getElementById('s-arttype').textContent = d.art_type || '—';
-    document.getElementById('s-dlaframe').textContent = S.dlaFrame + ' / 120';
-    document.getElementById('s-fracmode').textContent = S.fracMode || '—';
-    document.getElementById('s-gogame').textContent  = S.gobanGameName;
-    document.getElementById('s-move').textContent    =
-      S.gobanMove + ' / ' + S.gobanTotal;
+    document.getElementById('ss-gen').textContent=d.art_type||'—';
+    document.getElementById('ss-dlaframe').textContent=`${dlaf} / 120`;
+    document.getElementById('ss-fzoom').textContent='step '+fz;
+    document.getElementById('ss-game').textContent=gs.game_name||'—';
+    document.getElementById('ss-move').textContent=
+      `${gs.current_move||0} / ${gs.total_moves||0}`;
+    document.getElementById('ss-last').textContent=
+      S.lastFireTs?new Date(S.lastFireTs).toLocaleTimeString():'—';
 
-    // Dashboard
-    document.getElementById('dash-content').innerHTML = `
-      <div class="row">
-        <div class="stat"><span class="key">Image source</span>
-          <span class="val">${d.image_source || '—'}</span></div>
-        <div class="stat"><span class="key">Art type</span>
-          <span class="val">${d.art_type || '—'}</span></div>
-        <div class="stat"><span class="key">DLA frame</span>
-          <span class="val">${S.dlaFrame} / 120</span></div>
-        <div class="stat"><span class="key">Fractal zoom</span>
-          <span class="val">step ${S.fracZoom}</span></div>
-        <div class="stat"><span class="key">Go game</span>
-          <span class="val" style="font-size:12px">${S.gobanGameName}</span></div>
-        <div class="stat"><span class="key">Go move</span>
-          <span class="val">${S.gobanMove} / ${S.gobanTotal}</span></div>
-      </div>`;
+    startCountdown();
 
-    // Highlight current game in table
-    document.querySelectorAll('#game-tbody tr').forEach(tr => {
-      tr.classList.toggle('current', parseInt(tr.dataset.id) === S.currentGameId);
-    });
-
-  } catch(e) { console.warn('status poll failed', e); }
+  }catch(e){console.warn('poll error',e);}
 }
 
-// ── Generate ─────────────────────────────────────────────────────────────────
-async function generate() {
-  if (S.generating) return;
-  S.generating = true;
-  const btn = document.getElementById('gen-btn');
-  btn.disabled = true;
-  btn.textContent = '⏳ Generating…';
+// ── Generate ──────────────────────────────────────────────────────────────────
+async function generateNow(){
+  const btn=document.getElementById('gen-btn');
+  btn.disabled=true; btn.textContent='⏳…';
 
-  // Build payload from current UI state
-  const panel = document.querySelector('.mode-btn.active')?.dataset.panel;
-  let artType = S.artType;
-  if (panel === 'dla')     artType = 'dla';
-  if (panel === 'fractal') artType = 'fractal';
-  if (panel === 'goban')   artType = 'goban';
+  const tab=S.activeTab;
+  const payload={art_type:tab};
 
-  const payload = {
-    image_source: 'generative',
-    art_type: artType,
-    // fractal options
-    mb_fg: S.fracFg, mb_bg: S.fracBg,
-    mb_mode: S.fracMode,
-    // goban options
-    goban_source: 'file',
-    goban_mode: S.gobanMode,
-    goban_bg: S.gobanBg, goban_board: S.gobanBoard,
-    goban_white_color: S.gobanWhite, goban_black_color: S.gobanBlack,
-    goban_grid_thickness: S.gobanGrid, goban_highlight: S.gobanHighlight,
-  };
+  if(tab==='dla'){
+    payload.walkers=parseInt(document.getElementById('dla-walkers').value)||5;
+  } else if(tab==='fractal'){
+    payload.mb_fg=document.getElementById('frac-fg').value;
+    payload.mb_bg=document.getElementById('frac-bg').value;
+    payload.mb_mode=document.getElementById('frac-mode').value;
+  } else if(tab==='goban'){
+    payload.goban_source='file';
+    payload.goban_bg=document.getElementById('goban-bg').value;
+    payload.goban_board=document.getElementById('goban-board').value;
+    payload.goban_white_color=document.getElementById('goban-white').value;
+    payload.goban_black_color=document.getElementById('goban-black').value;
+    payload.goban_grid_thickness=parseInt(document.getElementById('goban-grid').value)||1;
+    payload.goban_highlight=document.getElementById('goban-highlight').value;
+  }
 
-  try {
-    const r = await fetch('/ui/generate', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload),
-    });
-    const d = await r.json();
-    if (d.status === 'ok') {
-      toast('✓ Image pushed to display', 'ok');
-    } else {
-      toast('✗ ' + (d.error || 'Unknown error'), 'err');
-    }
-  } catch(e) {
-    toast('✗ ' + e.message, 'err');
-  } finally {
-    S.generating = false;
-    btn.disabled = false;
-    btn.textContent = '▶ Generate';
-    pollStatus();
+  try{
+    const r=await fetch('/ui/generate',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const d=await r.json();
+    if(d.status==='ok') toast('✓ Pushed to display','ok');
+    else toast('✗ '+(d.error||'Failed'),'err');
+  }catch(e){toast('✗ '+e.message,'err');}
+  finally{
+    btn.disabled=false; btn.textContent='▶ Generate';
+    poll();
   }
 }
 
-function setSource(source, artType) {
-  S.source = source;
-  S.artType = artType;
-}
-
-// ── DLA ──────────────────────────────────────────────────────────────────────
-async function dlaReset() {
-  await fetch('/generate/dla/reset', { method: 'POST' });
-  toast('DLA sequence reset to frame 1', 'ok');
-  pollStatus();
+// ── DLA ───────────────────────────────────────────────────────────────────────
+async function dlaReset(){
+  await fetch('/generate/dla/reset',{method:'POST'});
+  toast('DLA sequence reset','ok'); poll();
 }
 
 // ── Fractal ───────────────────────────────────────────────────────────────────
-function buildSwatches(containerId, hiddenId, colours, selected) {
-  const container = document.getElementById(containerId);
-  container.innerHTML = '';
-  colours.forEach(c => {
-    const div = document.createElement('div');
-    div.className = 'swatch ' + c + (c === selected ? ' selected' : '');
-    div.title = c;
-    div.onclick = () => {
-      container.querySelectorAll('.swatch').forEach(s => s.classList.remove('selected'));
-      div.classList.add('selected');
-      document.getElementById(hiddenId).value = c;
-      if (hiddenId === 'frac-fg') S.fracFg = c;
-      if (hiddenId === 'frac-bg') S.fracBg = c;
+function buildSwatches(cid, hid, selected){
+  const c=document.getElementById(cid);
+  c.innerHTML='';
+  COLOURS.forEach(col=>{
+    const d=document.createElement('div');
+    d.className='sw '+col+(col===selected?' sel':'');
+    d.title=col;
+    d.onclick=()=>{
+      c.querySelectorAll('.sw').forEach(s=>s.classList.remove('sel'));
+      d.classList.add('sel');
+      document.getElementById(hid).value=col;
+      if(hid==='frac-fg') S.fracFg=col;
+      if(hid==='frac-bg') S.fracBg=col;
+      schedSave();
     };
-    container.appendChild(div);
+    c.appendChild(d);
   });
 }
 
-function saveFractalSettings() {
-  S.fracMode = document.getElementById('frac-mode').value;
-  const isZoom = S.fracMode === 'zoom_sequence';
-  document.getElementById('zoom-status').style.display    = isZoom ? 'block' : 'none';
-  document.getElementById('frac-reset-btn').style.display = isZoom ? 'inline-flex' : 'none';
+function setSwatchSel(cid, hid, val){
+  document.getElementById(hid).value=val;
+  document.querySelectorAll(`#${cid} .sw`).forEach(s=>{
+    s.classList.toggle('sel', s.title===val);
+  });
 }
 
-async function fractalReset() {
-  await fetch('/fractal/reset', { method: 'POST' });
-  toast('Fractal zoom reset', 'ok');
-  pollStatus();
+function fracSave(){
+  const isZoom=document.getElementById('frac-mode').value==='zoom_sequence';
+  document.getElementById('zoom-info').style.display=isZoom?'block':'none';
+  document.getElementById('frac-reset-btn').style.display=isZoom?'':'none';
+  schedSave();
+}
+
+async function fractalReset(){
+  await fetch('/fractal/reset',{method:'POST'});
+  toast('Fractal zoom reset','ok'); poll();
 }
 
 // ── Goban ─────────────────────────────────────────────────────────────────────
-async function setGobanMode(mode) {
-  S.gobanMode = mode;
-  await fetch('/goban/mode', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ mode }),
-  });
-  toast('Goban mode → ' + mode, 'ok');
-  pollStatus();
+async function setGobanMode(mode){
+  await fetch('/goban/mode',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+  toast('Goban mode → '+mode,'ok'); schedSave(); poll();
+}
+async function gobanRestart(){
+  await fetch('/goban/restart',{method:'POST'});
+  toast('Restarted from move 1','ok'); poll();
+}
+async function gobanSkip(){
+  await fetch('/goban/skip',{method:'POST'});
+  toast('Skipped to next game','ok'); poll();
+}
+async function gobanJumpMove(){
+  const move=parseInt(document.getElementById('goban-move-inp').value)||0;
+  await fetch('/goban/move',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({move})});
+  toast('Jumped to move '+move,'ok'); poll();
+}
+async function pickGame(id){
+  await fetch('/goban/select',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({game_id:id})});
+  document.getElementById('goban-mode').value='manual';
+  toast('Game selected','ok'); schedSave(); poll();
+}
+function gobanStyleSave(){ schedSave(); }
+
+// ── Scheduler ─────────────────────────────────────────────────────────────────
+function applyPreset(v){
+  if(!v) return;
+  document.getElementById('sch-interval').value=v;
+  schedSave();
 }
 
-async function gobanRestart() {
-  await fetch('/goban/restart', { method: 'POST' });
-  toast('Restarted from move 1', 'ok');
-  pollStatus();
+async function toggleScheduler(enabled){
+  await schedSave({enabled});
+  toast(enabled?'Scheduler started':'Scheduler stopped', enabled?'ok':'ok');
 }
 
-async function gobanSkip() {
-  await fetch('/goban/skip', { method: 'POST' });
-  toast('Skipped to next game', 'ok');
-  pollStatus();
+async function triggerNow(){
+  await fetch('/scheduler/trigger',{method:'POST'});
+  toast('Fired!','ok'); setTimeout(poll,500);
 }
 
-async function gobanJumpMove() {
-  const move = parseInt(document.getElementById('goban-move-input').value) || 0;
-  await fetch('/goban/move', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ move }),
-  });
-  toast('Jumped to move ' + move, 'ok');
-  pollStatus();
-}
-
-async function pickGame(gameId) {
-  await fetch('/goban/select', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ game_id: gameId }),
-  });
-  document.getElementById('goban-mode').value = 'manual';
-  S.gobanMode = 'manual';
-  toast('Game selected', 'ok');
-  pollStatus();
-}
-
-function saveGobanStyle() {
-  S.gobanBg        = document.getElementById('goban-bg').value;
-  S.gobanBoard     = document.getElementById('goban-board').value;
-  S.gobanWhite     = document.getElementById('goban-white').value;
-  S.gobanBlack     = document.getElementById('goban-black').value;
-  S.gobanGrid      = parseInt(document.getElementById('goban-grid').value);
-  S.gobanHighlight = document.getElementById('goban-highlight').value;
-}
-
-// ── Game table ────────────────────────────────────────────────────────────────
-async function loadGames() {
-  try {
-    const r = await fetch('/goban/games');
-    S.games = await r.json();
-    S.filteredGames = [...S.games];
-    renderGameTable();
-    document.getElementById('game-count').textContent =
-      S.games.length + ' games in library';
-  } catch(e) { console.warn('Failed to load games', e); }
-}
-
-function filterGames(query) {
-  const q = query.toLowerCase();
-  S.filteredGames = q
-    ? S.games.filter(g =>
-        g.filename.toLowerCase().includes(q) ||
-        (g.original_path || '').toLowerCase().includes(q) ||
-        (g.original_directory || '').toLowerCase().includes(q))
-    : [...S.games];
-  renderGameTable();
-}
-
-function renderGameTable() {
-  const tbody = document.getElementById('game-tbody');
-  tbody.innerHTML = '';
-  S.filteredGames.slice(0, 200).forEach(g => {
-    const tr = document.createElement('tr');
-    tr.dataset.id = g.id;
-    if (g.id === S.currentGameId) tr.classList.add('current');
-    tr.innerHTML = `
-      <td style="color:var(--muted)">${g.id}</td>
-      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-          title="${g.original_path || g.filename}">${g.filename}</td>
-      <td style="color:var(--muted);font-size:11px;max-width:140px;overflow:hidden;
-          text-overflow:ellipsis;white-space:nowrap">${g.original_directory || '—'}</td>
-      <td style="color:var(--muted);font-size:11px">${Math.round(g.size_bytes/1024)}KB</td>
-      <td><button class="btn btn-secondary pick-btn" onclick="pickGame(${g.id})">▶ Play</button></td>`;
-    tbody.appendChild(tr);
-  });
-  if (S.filteredGames.length > 200) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="5" style="color:var(--muted);text-align:center;padding:8px">
-      …and ${S.filteredGames.length - 200} more — refine search to see them</td>`;
-    tbody.appendChild(tr);
+async function schedSave(extra={}){
+  const payload={
+    active_generator:   S.activeTab,
+    interval_seconds:   parseInt(document.getElementById('sch-interval').value)||300,
+    frames_per_update:  parseInt(document.getElementById('sch-fpu').value)||1,
+    dla_walkers:        parseInt(document.getElementById('dla-walkers').value)||5,
+    fractal_fg:         document.getElementById('frac-fg').value,
+    fractal_bg:         document.getElementById('frac-bg').value,
+    fractal_mode:       document.getElementById('frac-mode').value,
+    goban_bg:           document.getElementById('goban-bg').value,
+    goban_board:        document.getElementById('goban-board').value,
+    goban_white_color:  document.getElementById('goban-white').value,
+    goban_black_color:  document.getElementById('goban-black').value,
+    goban_grid_thickness: parseInt(document.getElementById('goban-grid').value)||1,
+    goban_highlight:    document.getElementById('goban-highlight').value,
+    goban_mode:         document.getElementById('goban-mode').value,
+    ...extra,
+  };
+  const r=await fetch('/scheduler/settings',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const d=await r.json();
+  if(d.state){
+    S.schEnabled=d.state.enabled;
+    S.schInterval=d.state.interval_seconds;
+    document.getElementById('sch-toggle').checked=S.schEnabled;
+    startCountdown();
   }
 }
 
-// ── Init ─────────────────────────────────────────────────────────────────────
-const FRACTAL_COLOURS = {{ fractal_colours | tojson }};
-buildSwatches('fg-swatches', 'frac-fg', FRACTAL_COLOURS, S.fracFg);
-buildSwatches('bg-swatches', 'frac-bg', FRACTAL_COLOURS, S.fracBg);
+// ── Game table ────────────────────────────────────────────────────────────────
+async function loadGames(){
+  try{
+    const r=await fetch('/goban/games');
+    S.games=await r.json();
+    S.filtered=[...S.games];
+    renderGames();
+    document.getElementById('gcnt').textContent=S.games.length+' games in library';
+  }catch(e){console.warn('games load failed',e);}
+}
 
+function filterGames(q){
+  q=q.toLowerCase();
+  S.filtered=q?S.games.filter(g=>
+    (g.filename||'').toLowerCase().includes(q)||
+    (g.original_path||'').toLowerCase().includes(q)||
+    (g.original_directory||'').toLowerCase().includes(q)
+  ):[...S.games];
+  renderGames();
+}
+
+function renderGames(){
+  const tb=document.getElementById('gtbody');
+  tb.innerHTML='';
+  S.filtered.slice(0,200).forEach(g=>{
+    const tr=document.createElement('tr');
+    tr.dataset.id=g.id;
+    if(g.id===S.currentId) tr.classList.add('curr');
+    tr.innerHTML=`
+      <td style="color:var(--mut)">${g.id}</td>
+      <td title="${g.original_path||g.filename}"
+          style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        ${g.filename}</td>
+      <td style="color:var(--mut);font-size:11px;max-width:130px;overflow:hidden;
+          text-overflow:ellipsis;white-space:nowrap">${g.original_directory||'—'}</td>
+      <td style="color:var(--mut);font-size:11px">${Math.round(g.size_bytes/1024)}KB</td>
+      <td><button class="btn bs play-btn" onclick="pickGame(${g.id})">▶ Play</button></td>`;
+    tb.appendChild(tr);
+  });
+  if(S.filtered.length>200){
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td colspan="5" style="color:var(--mut);text-align:center;padding:8px">
+      …${S.filtered.length-200} more — refine search</td>`;
+    tb.appendChild(tr);
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+buildSwatches('fg-sw','frac-fg', S.fracFg);
+buildSwatches('bg-sw','frac-bg', S.fracBg);
+updateGenBar();
 checkHealth();
 loadGames();
-pollStatus();
-setInterval(pollStatus, 8000);
-setInterval(checkHealth, 30000);
+poll();
+setInterval(poll,5000);
+setInterval(checkHealth,30000);
 </script>
 </body>
 </html>
@@ -757,21 +784,12 @@ setInterval(checkHealth, 30000);
 @ui.route("/ui")
 @ui.route("/ui/")
 def index():
-    return render_template_string(
-        _HTML,
-        fractal_colours=FRACTAL_COLOURS,
-    )
+    return render_template_string(_HTML)
 
 
 @ui.route("/ui/generate", methods=["POST"])
 def ui_generate():
-    """Generate an image and push it to the device.
-
-    The Web UI JS posts here with { art_type, … }.  We call the same
-    generate endpoints used by the HA integration (within the same process
-    via direct HTTP to localhost) so both paths share identical behaviour
-    with no circular imports or event-loop conflicts.
-    """
+    """Generate an image and push it to the device from the Web UI."""
     from flask import request as req, jsonify
     import requests as rq
     import os
@@ -782,47 +800,43 @@ def ui_generate():
     base     = f"http://localhost:{port}"
 
     try:
-        # Step 1: generate image bytes by calling the relevant endpoint
         if art_type == "dla":
-            resp = rq.post(f"{base}/generate/dla",
-                           json={"frame": data.get("frame", None) or "__next__"},
-                           timeout=180)
+            gen_resp = rq.post(f"{base}/generate/dla", json={
+                "walkers": data.get("walkers", 5),
+            }, timeout=180)
         elif art_type == "fractal":
-            resp = rq.post(f"{base}/generate/fractal", json={
+            gen_resp = rq.post(f"{base}/generate/fractal", json={
                 "fg":        data.get("mb_fg", "white"),
                 "bg":        data.get("mb_bg", "black"),
                 "single":    data.get("mb_mode", "single") == "single",
                 "has_state": data.get("mb_mode", "single") == "zoom_sequence",
             }, timeout=180)
         elif art_type == "goban":
-            resp = rq.post(f"{base}/generate/goban", json={
-                "goban_source":    data.get("goban_source", "file"),
-                "bg":              data.get("goban_bg", "white"),
-                "board":           data.get("goban_board", "yellow"),
-                "white_color":     data.get("goban_white_color", "green"),
-                "black_color":     data.get("goban_black_color", "black"),
-                "grid_thickness":  data.get("goban_grid_thickness", 1),
-                "highlight":       data.get("goban_highlight", "ring"),
+            gen_resp = rq.post(f"{base}/generate/goban", json={
+                "goban_source":   data.get("goban_source", "file"),
+                "bg":             data.get("goban_bg",           "white"),
+                "board":          data.get("goban_board",         "yellow"),
+                "white_color":    data.get("goban_white_color",   "green"),
+                "black_color":    data.get("goban_black_color",   "black"),
+                "grid_thickness": data.get("goban_grid_thickness", 1),
+                "highlight":      data.get("goban_highlight",     "ring"),
             }, timeout=180)
         else:
             return jsonify({"error": f"Unknown art_type: {art_type!r}"}), 400
 
-        if resp.status_code != 200:
-            try:    err = resp.json().get("error", f"HTTP {resp.status_code}")
-            except: err = f"HTTP {resp.status_code}"
+        if gen_resp.status_code != 200:
+            try:    err = gen_resp.json().get("error", f"HTTP {gen_resp.status_code}")
+            except: err = f"HTTP {gen_resp.status_code}"
             return jsonify({"error": f"Generate failed: {err}"}), 502
 
-        image_bytes = resp.content
-
-        # Step 2: push the image bytes to the device
-        push = rq.post(f"{base}/push",
-                       data=image_bytes,
-                       headers={"Content-Type": "image/bmp"},
-                       timeout=60)
-        if push.status_code == 200:
+        push_resp = rq.post(f"{base}/push",
+                            data=gen_resp.content,
+                            headers={"Content-Type": "image/bmp"},
+                            timeout=60)
+        if push_resp.status_code == 200:
             return jsonify({"status": "ok"})
-        try:    err = push.json().get("error", f"HTTP {push.status_code}")
-        except: err = f"HTTP {push.status_code}"
+        try:    err = push_resp.json().get("error", f"HTTP {push_resp.status_code}")
+        except: err = f"HTTP {push_resp.status_code}"
         return jsonify({"error": f"Push failed: {err}"}), 502
 
     except Exception as exc:
