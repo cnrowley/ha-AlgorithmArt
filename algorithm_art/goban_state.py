@@ -31,25 +31,18 @@ def _count_moves(sgf_text: str) -> int:
     return len(re.findall(r";\s*[BW]\[", sgf_text))
 
 
-def _load_directory() -> list_LOGGER.warning("===== Goban directory scan =====")
-    _LOGGER.warning("SGF_DIR=%s", SGF_DIR)
-    _LOGGER.warning("SGF_DIR exists=%s", SGF_DIR.exists())
-    _LOGGER.warning("DIR_FILE=%s", DIR_FILE)
-    _LOGGER.warning("DIR_FILE exists=%s", DIR_FILE.exists())
+def _load_directory() -> list[dict]:
+    """ES from sgf_directory.py via exec."""
+    _LOGGER.info("Looking for SGF directory at: %s", SGF_DIR)
+    _LOGGER.info("SGF_DIR exists: %s", SGF_DIR.exists())
 
     if SGF_DIR.exists():
-        try:
-            entries = sorted(SGF_DIR.iterdir())
-            _LOGGER.warning("SGF_DIR contains %d entries", len(entries))
-
-            for p in entries[:100]:
-                _LOGGER.warning(
-                    "  %s (%s)",
-                    p.name,
-                    "dir" if p.is_dir() else "file",
-                )
-        except Exception as exc:
-            _LOGGER.warning("Failed to list SGF_DIR: %s", exc)
+        contents = list(SGF_DIR.iterdir())
+        _LOGGER.info(
+            "SGF_DIR contents (%d items): %s",
+            len(contents),
+            [p.name for p in contents[:10]],
+        )
 
     if not DIR_FILE.exists():
         _LOGGER.warning(
@@ -62,21 +55,16 @@ def _load_directory() -> list_LOGGER.warning("===== Goban directory scan =====")
 
     try:
         exec(DIR_FILE.read_text(encoding="utf-8"), namespace)  # noqa: S102
-
         files = namespace.get("SGF_FILES", [])
-
-        _LOGGER.warning(
-            "Loaded %d SGF entries from sgf_directory.py",
+        _LOGGER.info(
+            "Loaded %d games from %s",
             len(files),
+            DIR_FILE,
         )
-
-        if files:
-            _LOGGER.warning("First SGF entry: %s", files[0])
-
         return files
 
     except Exception as exc:
-        _LOGGER.exception(
+        _LOGGER.error(
             "Failed to exec sgf_directory.py: %s",
             exc,
         )
