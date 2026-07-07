@@ -8,7 +8,7 @@ Selects
 
 When source = "generative", a second picker chooses which generator to use:
 
-* Generative art type         – dla / mandelbrot / goban
+* Generative art type         – dla / fractal / goban
 
 ── DLA ──────────────────────────────────────────────────────────────────────
 (no user-tunable parameters – the CLI is fully stateful)
@@ -18,15 +18,15 @@ Sensors
 Buttons
   * DLA reset sequence       restarts from frame 1 on next Generate
 
-── Mandelbrot ────────────────────────────────────────────────────────────────
+── Fractal ────────────────────────────────────────────────────────────────
 Selects
   * Foreground colour        black / white / green / blue / red / yellow / orange
   * Background colour        same list
   * Mode                     single (one frame) / zoom_sequence (advancing zoom)
 Sensors
-  * Mandelbrot next frame    read-only; only meaningful in zoom_sequence mode
+  * Fractal next frame    read-only; only meaningful in zoom_sequence mode
 Buttons
-  * Mandelbrot reset zoom    deletes the state file so zoom restarts from scratch
+  * Fractal reset zoom    deletes the state file so zoom restarts from scratch
 
 ── Goban ─────────────────────────────────────────────────────────────────────
 Selects
@@ -62,8 +62,8 @@ All mutable parameter values are stored in
     hass.data["{DOMAIN}_art_params"][entry_id]
 so they survive coordinator refreshes without touching the device config.
 
-The Mandelbrot zoom state JSON file is stored at:
-    <hass_config_dir>/generative_art/<entry_id>/mandelbrot_state.json
+The Fractal zoom state JSON file is stored at:
+    <hass_config_dir>/generative_art/<entry_id>/fractal_state.json
 and persists across HA restarts, enabling a long-running zoom sequence.
 """
 
@@ -88,17 +88,17 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .art_generator import (
     DLA_SEQUENCE_LENGTH,
-    MANDELBROT_COLOURS,
+    FRACTAL_COLOURS,
     GOBAN_BG_COLOURS,
     GOBAN_BOARD_COLOURS,
     GOBAN_WHITE_STONE_COLOURS,
     GOBAN_BLACK_STONE_COLOURS,
     GOBAN_HIGHLIGHT_MODES,
     DLAParams,
-    MandelbrotParams,
+    FractalParams,
     GobanParams,
     generate_dla,
-    generate_mandelbrot,
+    generate_fractal,
     generate_goban,
 )
 from .const import (
@@ -114,11 +114,11 @@ _LOGGER = logging.getLogger(__name__)
 
 # ── Art type constants ─────────────────────────────────────────────────────────
 ART_TYPE_DLA        = "dla"
-ART_TYPE_MANDELBROT = "mandelbrot"
+ART_TYPE_FRACTAL = "fractal"
 ART_TYPE_GOBAN      = "goban"
-ART_TYPES           = [ART_TYPE_DLA, ART_TYPE_MANDELBROT, ART_TYPE_GOBAN]
+ART_TYPES           = [ART_TYPE_DLA, ART_TYPE_FRACTAL, ART_TYPE_GOBAN]
 
-MANDELBROT_MODES    = ["single", "zoom_sequence"]
+FRACTAL_MODES    = ["single", "zoom_sequence"]
 
 # hass.data key for art parameter state
 _ART_STATE_KEY = f"{DOMAIN}_art_params"
@@ -164,9 +164,9 @@ def _dla_manager(entry_id: str) -> DLASequenceManager:
     return _DLA_MANAGERS[entry_id]
 
 
-# ── Mandelbrot zoom frame counter ──────────────────────────────────────────────
+# ── Fractal zoom frame counter ──────────────────────────────────────────────
 
-class MandelbrotSequenceManager:
+class FractalSequenceManager:
     """Tracks how many zoom steps have been generated for display purposes."""
 
     def __init__(self) -> None:
@@ -183,12 +183,12 @@ class MandelbrotSequenceManager:
         self._step = 0
 
 
-_MANDELBROT_MANAGERS: dict[str, MandelbrotSequenceManager] = {}
+_FRACTAL_MANAGERS: dict[str, FractalSequenceManager] = {}
 
-def _mandelbrot_manager(entry_id: str) -> MandelbrotSequenceManager:
-    if entry_id not in _MANDELBROT_MANAGERS:
-        _MANDELBROT_MANAGERS[entry_id] = MandelbrotSequenceManager()
-    return _MANDELBROT_MANAGERS[entry_id]
+def _fractal_manager(entry_id: str) -> FractalSequenceManager:
+    if entry_id not in _FRACTAL_MANAGERS:
+        _FRACTAL_MANAGERS[entry_id] = FractalSequenceManager()
+    return _FRACTAL_MANAGERS[entry_id]
 
 
 # ── Platform setup ─────────────────────────────────────────────────────────────
@@ -201,7 +201,7 @@ async def async_setup_entry(
     coordinator: PhotopainterArtCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     _dla_manager(entry.entry_id)
-    _mandelbrot_manager(entry.entry_id)
+    _fractal_manager(entry.entry_id)
 
     entities: list[Entity] = [
         # Primary picker — what kind of image source feeds the next display
@@ -218,12 +218,12 @@ async def async_setup_entry(
         DLAFrameSensor(coordinator, entry, hass),
         DLAResetButton(coordinator, entry, hass),
 
-        # Mandelbrot
-        MandelbrotFgSelect(coordinator, entry, hass),
-        MandelbrotBgSelect(coordinator, entry, hass),
-        MandelbrotModeSelect(coordinator, entry, hass),
-        MandelbrotZoomStepSensor(coordinator, entry, hass),
-        MandelbrotResetZoomButton(coordinator, entry, hass),
+        # Fractal
+        FractalFgSelect(coordinator, entry, hass),
+        FractalBgSelect(coordinator, entry, hass),
+        FractalModeSelect(coordinator, entry, hass),
+        FractalZoomStepSensor(coordinator, entry, hass),
+        FractalResetZoomButton(coordinator, entry, hass),
 
         # Goban
         GobanSourceSelect(coordinator, entry, hass),
@@ -444,22 +444,22 @@ class DLAResetButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
         self.hass.async_create_task(self.coordinator.async_request_refresh())
 
 
-# ── Mandelbrot entities ────────────────────────────────────────────────────────
+# ── Fractal entities ────────────────────────────────────────────────────────
 
-class MandelbrotFgSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
-    """Mandelbrot foreground colour."""
+class FractalFgSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
+    """Fractal foreground colour."""
 
-    _param_key     = "mb_fg"
+    _param_key     = "fractal_fg"
     _default_value = "white"
-    _attr_options  = MANDELBROT_COLOURS
+    _attr_options  = FRACTAL_COLOURS
     _attr_icon     = "mdi:palette"
 
     def __init__(self, coordinator, entry, hass):
         super().__init__(coordinator)
         self._entry = entry
         self.hass   = hass
-        self._attr_unique_id   = f"{entry.entry_id}_mb_fg"
-        self._attr_name        = "Mandelbrot foreground colour"
+        self._attr_unique_id   = f"{entry.entry_id}_fractal_fg"
+        self._attr_name        = "Fractal foreground colour"
         self._attr_device_info = coordinator.device_info
 
     @property
@@ -471,20 +471,20 @@ class MandelbrotFgSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
         self.async_write_ha_state()
 
 
-class MandelbrotBgSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
-    """Mandelbrot background colour."""
+class FractalBgSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
+    """Fractal background colour."""
 
-    _param_key     = "mb_bg"
+    _param_key     = "fractal_bg"
     _default_value = "black"
-    _attr_options  = MANDELBROT_COLOURS
+    _attr_options  = FRACTAL_COLOURS
     _attr_icon     = "mdi:palette-outline"
 
     def __init__(self, coordinator, entry, hass):
         super().__init__(coordinator)
         self._entry = entry
         self.hass   = hass
-        self._attr_unique_id   = f"{entry.entry_id}_mb_bg"
-        self._attr_name        = "Mandelbrot background colour"
+        self._attr_unique_id   = f"{entry.entry_id}_fractal_bg"
+        self._attr_name        = "Fractal background colour"
         self._attr_device_info = coordinator.device_info
 
     @property
@@ -496,20 +496,20 @@ class MandelbrotBgSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
         self.async_write_ha_state()
 
 
-class MandelbrotModeSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
+class FractalModeSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
     """Single frame vs. advancing zoom sequence."""
 
-    _param_key     = "mb_mode"
+    _param_key     = "fractal_mode"
     _default_value = "single"
-    _attr_options  = MANDELBROT_MODES
+    _attr_options  = FRACTAL_MODES
     _attr_icon     = "mdi:magnify-expand"
 
     def __init__(self, coordinator, entry, hass):
         super().__init__(coordinator)
         self._entry = entry
         self.hass   = hass
-        self._attr_unique_id   = f"{entry.entry_id}_mb_mode"
-        self._attr_name        = "Mandelbrot mode"
+        self._attr_unique_id   = f"{entry.entry_id}_fractal_mode"
+        self._attr_name        = "Fractal mode"
         self._attr_device_info = coordinator.device_info
 
     @property
@@ -521,7 +521,7 @@ class MandelbrotModeSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
         self.async_write_ha_state()
 
 
-class MandelbrotZoomStepSensor(_ArtParamMixin, CoordinatorEntity, SensorEntity):
+class FractalZoomStepSensor(_ArtParamMixin, CoordinatorEntity, SensorEntity):
     """Read-only: how many zoom steps have been generated so far."""
 
     _param_key        = ""
@@ -535,22 +535,22 @@ class MandelbrotZoomStepSensor(_ArtParamMixin, CoordinatorEntity, SensorEntity):
         self._entry = entry
         self.hass   = hass
         self._attr_unique_id   = f"{entry.entry_id}_mb_zoom_step"
-        self._attr_name        = "Mandelbrot zoom step"
+        self._attr_name        = "Fractal zoom step"
         self._attr_device_info = coordinator.device_info
 
     @property
     def native_value(self) -> int:
-        return _mandelbrot_manager(self._entry.entry_id).current_step
+        return _fractal_manager(self._entry.entry_id).current_step
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
-            "state_location": "sidecar /data/state/mandelbrot_state.json",
+            "state_location": "sidecar /data/state/fractal_state.json",
         }
 
 
-class MandelbrotResetZoomButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
-    """Tell the sidecar to delete its Mandelbrot state file so the next
+class FractalResetZoomButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
+    """Tell the sidecar to delete its Fractal state file so the next
     Generate starts a fresh zoom sequence from the default position."""
 
     _param_key     = ""
@@ -562,14 +562,14 @@ class MandelbrotResetZoomButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity)
         self._entry = entry
         self.hass   = hass
         self._attr_unique_id   = f"{entry.entry_id}_mb_reset_zoom"
-        self._attr_name        = "Mandelbrot reset zoom"
+        self._attr_name        = "Fractal reset zoom"
         self._attr_device_info = coordinator.device_info
 
     async def async_press(self) -> None:
-        from .art_generator import reset_mandelbrot_zoom
-        await reset_mandelbrot_zoom()
-        _mandelbrot_manager(self._entry.entry_id).reset()
-        _LOGGER.info("Mandelbrot zoom reset requested on sidecar")
+        from .art_generator import reset_fractal_zoom
+        await reset_fractal_zoom()
+        _fractal_manager(self._entry.entry_id).reset()
+        _LOGGER.info("Fractal zoom reset requested on sidecar")
         self.hass.async_create_task(self.coordinator.async_request_refresh())
 
 
@@ -932,13 +932,13 @@ class GenerateArtButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
                 "dla_sequence_length": DLA_SEQUENCE_LENGTH,
             })
 
-        elif art_type == ART_TYPE_MANDELBROT:
-            mb_mgr = _mandelbrot_manager(self._entry.entry_id)
+        elif art_type == ART_TYPE_FRACTAL:
+            fractal_mgr = _fractal_manager(self._entry.entry_id)
             attrs.update({
-                "mb_fg":        state.get("mb_fg",   "white"),
-                "mb_bg":        state.get("mb_bg",   "black"),
-                "mb_mode":      state.get("mb_mode", "single"),
-                "mb_zoom_step": mb_mgr.current_step,
+                "fractal_fg":        state.get("fractal_fg",   "white"),
+                "fractal_bg":        state.get("fractal_bg",   "black"),
+                "fractal_mode":      state.get("fractal_mode", "single"),
+                "mb_zoom_step": fractal_mgr.current_step,
             })
 
         elif art_type == ART_TYPE_GOBAN:
@@ -1059,7 +1059,7 @@ class GenerateArtButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
             return None
 
     async def _generate_art_image(self, state: dict[str, Any]) -> bytes | None:
-        """Run the selected generator (DLA / Mandelbrot / Goban) and return bytes."""
+        """Run the selected generator (DLA / Fractal / Goban) and return bytes."""
         art_type = state.get("art_type", ART_TYPE_DLA)
         _LOGGER.info("Generating %s artwork …", art_type)
 
@@ -1069,14 +1069,14 @@ class GenerateArtButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
             _LOGGER.info("DLA: frame %d / %d", frame, DLA_SEQUENCE_LENGTH)
             return await generate_dla(DLAParams(frame=frame))
 
-        if art_type == ART_TYPE_MANDELBROT:
-            mb_mgr = _mandelbrot_manager(self._entry.entry_id)
-            mode   = state.get("mb_mode", "single")
+        if art_type == ART_TYPE_FRACTAL:
+            fractal_mgr = _fractal_manager(self._entry.entry_id)
+            mode   = state.get("fractal_mode", "single")
             is_seq = (mode == "zoom_sequence")
 
-            params = MandelbrotParams(
-                fg         = state.get("mb_fg",   "white"),
-                bg         = state.get("mb_bg",   "black"),
+            params = FractalParams(
+                fg         = state.get("fractal_fg",   "white"),
+                bg         = state.get("fractal_bg",   "black"),
                 single     = not is_seq,
                 frames     = 1,              # one step per Generate press
                 # Non-empty state_path tells art_generator.py to set
@@ -1084,9 +1084,9 @@ class GenerateArtButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
                 # lives in the sidecar's /data/state directory.
                 state_path = "sidecar" if is_seq else "",
             )
-            image_bytes = await generate_mandelbrot(params)
+            image_bytes = await generate_fractal(params)
             if is_seq:
-                mb_mgr.advance()
+                fractal_mgr.advance()
             return image_bytes
 
         if art_type == ART_TYPE_GOBAN:

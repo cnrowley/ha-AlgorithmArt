@@ -45,8 +45,6 @@ DEFAULT_STATE: dict[str, Any] = {
     "active_generator":  "dla",
     "last_fire":         None,
     "next_fire":         None,
-    # DLA options
-    "dla_walkers":       5,
     # Fractal options
     "fractal_fg":        "white",
     "fractal_bg":        "black",

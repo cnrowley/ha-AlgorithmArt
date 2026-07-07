@@ -43,13 +43,13 @@ ART_STATE_KEY = f"{DOMAIN}_art_params"
 
 # Generative art type identifiers
 ART_TYPE_DLA        = "dla"
-ART_TYPE_MANDELBROT = "mandelbrot"
+ART_TYPE_FRACTAL = "fractal"
 ART_TYPE_GOBAN      = "goban"
-ART_TYPES           = [ART_TYPE_DLA, ART_TYPE_MANDELBROT, ART_TYPE_GOBAN]
+ART_TYPES           = [ART_TYPE_DLA, ART_TYPE_FRACTAL, ART_TYPE_GOBAN]
 
-# Mandelbrot colour options (must match the binary's colorMap)
-MANDELBROT_COLOURS  = ["black", "white", "green", "blue", "red", "yellow", "orange"]
-MANDELBROT_MODES    = ["single", "zoom_sequence"]
+# Fractal colour options (must match the binary's colorMap)
+FRACTAL_COLOURS  = ["black", "white", "green", "blue", "red", "yellow", "orange"]
+FRACTAL_MODES    = ["single", "zoom_sequence"]
 
 # Goban options (kept here for reference; entity modules import the
 # canonical lists directly from art_generator.py)

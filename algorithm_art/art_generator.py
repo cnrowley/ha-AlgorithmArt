@@ -1,6 +1,6 @@
 """Art generator — HTTP client for the PhotopainterArt sidecar.
 
-The generator binaries (dla.x, mandelbrot.x, goban.x) run in a separate
+The generator binaries (dla.x, fractal.x, goban.x) run in a separate
 HA add-on sidecar container.  This module calls that sidecar's Flask API
 and returns raw BMP bytes, exactly as if the binaries had been called
 directly.
@@ -8,12 +8,12 @@ directly.
 Sidecar API (default base URL http://localhost:8765):
 
     POST /generate/dla          { "frame": N }
-    POST /generate/mandelbrot   { "fg", "bg", "single", "frames", "has_state" }
+    POST /generate/fractal   { "fg", "bg", "single", "frames", "has_state" }
     POST /generate/goban        { "sgf_source", "library_id", "sgf_url",
                                   "sgf_text", "move", "bg", "board",
                                   "white_color", "black_color",
                                   "grid_thickness", "highlight" }
-    POST /mandelbrot/reset      {}
+    POST /fractal/reset      {}
     GET  /health
 
 The sidecar URL is read from the PHOTOPAINTER_SIDECAR_URL environment
@@ -52,8 +52,8 @@ GOBAN_BLACK_STONE_COLOURS = ["black", "red"]
 GOBAN_GRID_THICKNESS      = [1, 2]
 GOBAN_HIGHLIGHT_MODES     = ["dot", "ring", "none"]
 
-# ── Mandelbrot colour options ───────────────────────────────────────────────
-MANDELBROT_COLOURS = ["black", "white", "green", "blue", "red", "yellow", "orange"]
+# ── Fractal colour options ───────────────────────────────────────────────
+FRACTAL_COLOURS = ["black", "white", "green", "blue", "red", "yellow", "orange"]
 
 
 # ── Parameter dataclasses ───────────────────────────────────────────────────
@@ -65,8 +65,8 @@ class DLAParams:
 
 
 @dataclass
-class MandelbrotParams:
-    """Parameters for mandelbrot.x.
+class FractalParams:
+    """Parameters for fractal.x.
 
     ``single=True``  → one frame at current zoom position.
     ``single=False`` → advance one zoom step (uses persistent state file in
@@ -150,14 +150,14 @@ async def generate_dla(params: DLAParams) -> bytes:
     return await _post("/generate/dla", {"frame": params.frame})
 
 
-async def generate_mandelbrot(params: MandelbrotParams) -> bytes:
-    """Generate a Mandelbrot frame via the sidecar and return BMP bytes."""
+async def generate_fractal(params: FractalParams) -> bytes:
+    """Generate a Fractal frame via the sidecar and return BMP bytes."""
     is_zoom_sequence = bool(params.state_path)   # non-empty = zoom mode
     _LOGGER.info(
-        "Mandelbrot: fg=%s bg=%s single=%s zoom_sequence=%s",
+        "Fractal: fg=%s bg=%s single=%s zoom_sequence=%s",
         params.fg, params.bg, params.single, is_zoom_sequence,
     )
-    return await _post("/generate/mandelbrot", {
+    return await _post("/generate/fractal", {
         "fg":        params.fg,
         "bg":        params.bg,
         "single":    params.single,
@@ -187,7 +187,7 @@ async def generate_goban(params: GobanParams) -> bytes:
     })
 
 
-async def reset_mandelbrot_zoom() -> None:
+async def reset_fractal_zoom() -> None:
     """Tell the sidecar to delete the fractal zoom state file."""
     url     = f"{SIDECAR_URL}/fractal/reset"
     timeout = aiohttp.ClientTimeout(total=10)
@@ -201,7 +201,6 @@ async def reset_mandelbrot_zoom() -> None:
 
 
 # Alias
-reset_fractal_zoom = reset_mandelbrot_zoom
 
 
 async def push_to_device(image_bytes: bytes, photoframe_host: str) -> None:

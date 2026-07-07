@@ -1,4 +1,18 @@
-"""AlgorithmArt Web UI — Flask blueprint serving the management dashboard."""
+"""AlgorithmArt Web UI — Flask blueprint serving the management dashboard.
+
+Structure
+---------
+Home page   — choose the *method* (DLA / Fractal / Go), the *update period*,
+              and *frames per update*. This is the scheduler control surface.
+Sub pages   — one per generator, reached via "Configure options →". Each
+              sub page exposes exactly the flags that generator's executable
+              accepts, plus a manual "Generate & push" action.
+
+Everything lives in a single HTML document; navigation between the home
+page and the sub pages is client-side (hash routing: #/home, #/dla,
+#/fractal, #/goban) so the back button and direct links both work, without
+needing extra Flask routes.
+"""
 
 from __future__ import annotations
 
@@ -22,37 +36,52 @@ _HTML = r"""<!DOCTYPE html>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--txt);font-family:system-ui,sans-serif;font-size:14px}
 
-/* ── Layout ── */
+/* -- Layout -- */
 header{background:var(--sur);border-bottom:1px solid var(--brd);
   padding:14px 24px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:100}
-header h1{font-size:18px;font-weight:700}
+header h1{font-size:18px;font-weight:700;cursor:pointer}
 .dot{width:10px;height:10px;border-radius:50%;background:var(--mut);flex-shrink:0}
 .dot.ok{background:var(--grn)}.dot.err{background:var(--red)}
-.container{max-width:1120px;margin:0 auto;padding:20px;display:grid;
-  grid-template-columns:240px 1fr;gap:var(--gap)}
-@media(max-width:700px){.container{grid-template-columns:1fr}}
+.container{max-width:900px;margin:0 auto;padding:20px;display:flex;flex-direction:column;gap:var(--gap)}
 
-/* ── Sidebar ── */
-.sidebar{display:flex;flex-direction:column;gap:10px}
-.tab-btn{display:flex;align-items:center;gap:10px;padding:11px 14px;
-  background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);
-  cursor:pointer;color:var(--txt);font-size:13px;font-weight:500;
-  transition:all .15s;width:100%;text-align:left}
-.tab-btn:hover,.tab-btn.active{border-color:var(--acc);background:var(--sur2)}
-.tab-btn.active .tlabel{color:var(--acc)}
-.tab-btn .icon{font-size:18px;width:24px;text-align:center}
+/* -- Breadcrumb -- */
+.crumb{font-size:12px;color:var(--mut)}
+.crumb a{color:var(--acc);cursor:pointer;text-decoration:none;font-weight:600}
+.crumb a:hover{text-decoration:underline}
 
-/* ── Status card ── */
-.sc{background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);padding:14px}
-.sc h3{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:10px}
-.st{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--brd)}
+/* -- Views -- */
+.view{display:none;flex-direction:column;gap:var(--gap)}
+.view.active{display:flex}
+
+/* -- Home: method cards -- */
+.home-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--gap)}
+.method-card{background:var(--sur);border:2px solid var(--brd);border-radius:var(--r);
+  padding:18px;cursor:pointer;transition:all .15s;display:flex;flex-direction:column;gap:6px}
+.method-card:hover{border-color:var(--acc2)}
+.method-card.sel{border-color:var(--acc);background:var(--sur2)}
+.mc-top{display:flex;align-items:center;gap:10px}
+.mc-icon{font-size:22px}
+.mc-title{font-size:15px;font-weight:700}
+.mc-sub{font-size:12px;color:var(--mut)}
+.mc-stat{font-size:12px;color:var(--acc);margin-top:4px}
+.mc-cfg{margin-top:8px;align-self:flex-start}
+.mc-badge{margin-left:auto;font-size:10px;padding:2px 8px;border-radius:20px;
+  background:var(--acc);color:#fff;opacity:0}
+.method-card.sel .mc-badge{opacity:1}
+
+/* -- Cards -- */
+.card{background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);padding:20px}
+.card h2{font-size:15px;font-weight:600;margin-bottom:16px;
+  padding-bottom:10px;border-bottom:1px solid var(--brd);display:flex;align-items:center;gap:8px}
+.hint{color:var(--mut);font-size:12px;margin-bottom:16px;line-height:1.5}
+
+/* -- Status rows -- */
+.st{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--brd)}
 .st:last-child{border:none}
-.sk{color:var(--mut);font-size:12px}.sv{font-weight:600;font-size:12px;text-align:right;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sk{color:var(--mut);font-size:12px}.sv{font-weight:600;font-size:12px;text-align:right;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* ── Scheduler card ── */
-.sch-card{background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);padding:14px}
-.sch-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.sch-header h3{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--mut)}
+/* -- Scheduler -- */
+.sch-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
 .toggle{position:relative;display:inline-flex;cursor:pointer}
 .toggle input{opacity:0;width:0;height:0}
 .slider{position:relative;display:inline-block;width:40px;height:22px;
@@ -61,25 +90,16 @@ header h1{font-size:18px;font-weight:700}
   background:#fff;border-radius:50%;top:3px;left:3px;transition:.3s}
 input:checked+.slider{background:var(--acc)}
 input:checked+.slider:before{transform:translateX(18px)}
-.countdown{font-size:22px;font-weight:700;color:var(--acc);text-align:center;
-  padding:6px 0;letter-spacing:1px}
+.countdown{font-size:20px;font-weight:700;color:var(--acc);letter-spacing:1px}
 .countdown.inactive{color:var(--mut);font-size:14px}
 
-/* ── Main panels ── */
-.main{display:flex;flex-direction:column;gap:var(--gap)}
-.panel{display:none;flex-direction:column;gap:var(--gap)}
-.panel.active{display:flex}
-.card{background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);padding:20px}
-.card h2{font-size:15px;font-weight:600;margin-bottom:16px;
-  padding-bottom:10px;border-bottom:1px solid var(--brd);display:flex;align-items:center;gap:8px}
-
-/* ── Generate bar ── */
+/* -- Generate bar -- */
 .gen-bar{background:var(--sur2);border:1px solid var(--brd);border-radius:var(--r);
   padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px}
 .gen-info strong{display:block;font-size:14px;margin-bottom:2px}
 .gen-info span{font-size:12px;color:var(--mut)}
 
-/* ── Forms ── */
+/* -- Forms -- */
 .row{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
 .field{display:flex;flex-direction:column;gap:5px}
 label{font-size:11px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
@@ -91,7 +111,7 @@ select:focus,input:focus{outline:none;border-color:var(--acc)}
 .interval-row input[type=number]{flex:1}
 .interval-row select{flex:1}
 
-/* ── Colour swatches ── */
+/* -- Colour swatches -- */
 .swatches{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
 .sw{width:30px;height:30px;border-radius:6px;cursor:pointer;
   border:2px solid transparent;transition:all .15s;flex-shrink:0}
@@ -101,7 +121,7 @@ select:focus,input:focus{outline:none;border-color:var(--acc)}
 .sw.blue{background:#3b82f6}.sw.red{background:#ef4444}.sw.yellow{background:#eab308}
 .sw.orange{background:#f97316}
 
-/* ── Buttons ── */
+/* -- Buttons -- */
 .btn{padding:8px 16px;border-radius:7px;border:none;cursor:pointer;
   font-size:13px;font-weight:600;transition:all .15s;display:inline-flex;
   align-items:center;gap:6px}
@@ -112,14 +132,14 @@ select:focus,input:focus{outline:none;border-color:var(--acc)}
 .bd{background:var(--red);color:#fff}.bd:hover{filter:brightness(1.15)}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap}
 
-/* ── Progress ── */
+/* -- Progress -- */
 .prog-wrap{background:var(--sur2);border-radius:20px;height:7px;overflow:hidden;margin-top:4px}
 .prog-bar{height:100%;border-radius:20px;
   background:linear-gradient(90deg,var(--acc),var(--acc2));transition:width .4s}
 
-/* ── Game table ── */
+/* -- Game table -- */
 .tsearch{width:100%;margin-bottom:10px}
-.twrap{max-height:300px;overflow-y:auto;border:1px solid var(--brd);border-radius:6px}
+.twrap{max-height:320px;overflow-y:auto;border:1px solid var(--brd);border-radius:6px}
 table{width:100%;border-collapse:collapse;font-size:12px}
 th{text-align:left;color:var(--mut);padding:6px 8px;
   border-bottom:1px solid var(--brd);position:sticky;top:0;background:var(--sur);font-size:11px}
@@ -128,7 +148,7 @@ tr:hover td{background:var(--sur2)}
 tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
 .play-btn{padding:2px 9px;font-size:11px}
 
-/* ── Toast ── */
+/* -- Toast -- */
 #toast{position:fixed;bottom:20px;right:20px;background:var(--sur2);
   border:1px solid var(--brd);border-radius:var(--r);padding:10px 16px;
   font-size:13px;opacity:0;pointer-events:none;transition:opacity .3s;z-index:999}
@@ -140,267 +160,289 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
 
 <header>
   <div class="dot" id="hdot"></div>
-  <h1>⬡ AlgorithmArt</h1>
-  <span id="htxt" style="font-size:12px;color:var(--mut)">checking…</span>
+  <h1 onclick="openPage('home')">AlgorithmArt</h1>
+  <span id="htxt" style="font-size:12px;color:var(--mut)">checking...</span>
   <span style="flex:1"></span>
   <span id="gen-active-badge" style="font-size:11px;background:var(--sur2);
-    border:1px solid var(--brd);padding:3px 10px;border-radius:20px;color:var(--acc)">—</span>
+    border:1px solid var(--brd);padding:3px 10px;border-radius:20px;color:var(--acc)">-</span>
 </header>
 
 <div class="container">
-<!-- ── SIDEBAR ─────────────────────────────────────────────────────────── -->
-<aside class="sidebar">
-  <button class="tab-btn active" data-tab="dla" onclick="switchTab('dla',this)">
-    <span class="icon">🌿</span><span class="tlabel">DLA</span></button>
-  <button class="tab-btn" data-tab="fractal" onclick="switchTab('fractal',this)">
-    <span class="icon">∞</span><span class="tlabel">Fractal</span></button>
-  <button class="tab-btn" data-tab="goban" onclick="switchTab('goban',this)">
-    <span class="icon">⬡</span><span class="tlabel">Go / Goban</span></button>
 
-  <!-- Scheduler -->
-  <div class="sch-card">
+<!-- ============================ HOME ============================ -->
+<section class="view active" id="view-home">
+  <div class="crumb">Home</div>
+
+  <div class="home-grid">
+    <div class="method-card" id="mc-dla" onclick="selectMethod('dla')">
+      <div class="mc-top"><span class="mc-icon">*</span><span class="mc-title">DLA</span>
+        <span class="mc-badge">ACTIVE</span></div>
+      <div class="mc-sub">Diffusion-limited aggregation</div>
+      <div class="mc-stat" id="mc-dla-stat">frame - / 120</div>
+      <button class="btn bs mc-cfg" onclick="event.stopPropagation();openPage('dla')">Configure options &rarr;</button>
+    </div>
+    <div class="method-card" id="mc-fractal" onclick="selectMethod('fractal')">
+      <div class="mc-top"><span class="mc-icon">&infin;</span><span class="mc-title">Fractal</span>
+        <span class="mc-badge">ACTIVE</span></div>
+      <div class="mc-sub">Escape-time fractal renderer</div>
+      <div class="mc-stat" id="mc-fractal-stat">step -</div>
+      <button class="btn bs mc-cfg" onclick="event.stopPropagation();openPage('fractal')">Configure options &rarr;</button>
+    </div>
+    <div class="method-card" id="mc-goban" onclick="selectMethod('goban')">
+      <div class="mc-top"><span class="mc-icon">#</span><span class="mc-title">Go / Goban</span>
+        <span class="mc-badge">ACTIVE</span></div>
+      <div class="mc-sub">Replays SGF game records</div>
+      <div class="mc-stat" id="mc-goban-stat">- / -</div>
+      <button class="btn bs mc-cfg" onclick="event.stopPropagation();openPage('goban')">Configure options &rarr;</button>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="sch-header">
-      <h3>Auto-refresh</h3>
+      <h2 style="margin:0;padding:0;border:none">Update schedule</h2>
       <label class="toggle">
         <input type="checkbox" id="sch-toggle" onchange="toggleScheduler(this.checked)">
         <span class="slider"></span>
       </label>
     </div>
-    <div class="field" style="margin-bottom:10px">
-      <label>Interval</label>
-      <div class="interval-row">
-        <input type="number" id="sch-interval" min="10" value="300"
-          placeholder="seconds" onchange="schedSave()">
-        <select id="sch-preset" onchange="applyPreset(this.value)">
-          <option value="">Pick…</option>
-          <!-- filled by JS from /status -->
+    <p class="hint">Chooses how often the currently selected method (above) generates
+      a new image and pushes it to the PhotoFrame.</p>
+    <div class="row" style="margin-bottom:6px">
+      <div class="field">
+        <label>Update period</label>
+        <div class="interval-row">
+          <input type="number" id="sch-interval" min="10" value="300"
+            placeholder="seconds" onchange="schedSave()">
+          <select id="sch-preset" onchange="applyPreset(this.value)">
+            <option value="">Pick...</option>
+            <!-- filled by JS from /status -->
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Frames per update</label>
+        <input type="number" id="sch-fpu" min="1" max="50" value="1" onchange="schedSave()">
+      </div>
+      <div class="field">
+        <label>Next update</label>
+        <div class="countdown inactive" id="countdown">Stopped</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+      <button class="btn bp" onclick="triggerNow()">Fire now</button>
+      <span id="last-fire-lbl" style="font-size:11px;color:var(--mut)"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Live status</h2>
+    <div class="st"><span class="sk">Active method</span><span class="sv" id="ss-gen">-</span></div>
+    <div class="st"><span class="sk">DLA frame</span><span class="sv" id="ss-dlaframe">-</span></div>
+    <div class="st"><span class="sk">Fractal zoom</span><span class="sv" id="ss-fzoom">-</span></div>
+    <div class="st"><span class="sk">Go game</span><span class="sv" id="ss-game">-</span></div>
+    <div class="st"><span class="sk">Go move</span><span class="sv" id="ss-move">-</span></div>
+    <div class="st"><span class="sk">Last push</span><span class="sv" id="ss-last">-</span></div>
+  </div>
+
+  <div class="gen-bar">
+    <div class="gen-info">
+      <strong id="gen-label">Generate &amp; push</strong>
+      <span id="gen-sub">Uses the active method's current settings</span>
+    </div>
+    <button class="btn bp" id="gen-btn" style="font-size:15px;padding:12px 28px"
+            onclick="generateNow()">Generate</button>
+  </div>
+</section>
+
+<!-- ============================ DLA ============================ -->
+<section class="view" id="view-dla">
+  <div class="crumb"><a onclick="openPage('home')">&larr; Home</a> / DLA</div>
+  <div class="card">
+    <h2>DLA - Diffusion-Limited Aggregation</h2>
+    <p class="hint">
+      Particles random-walk until they stick to the growing cluster.
+      <code>dla.x</code> takes no tunable parameters, just a working directory
+      and a frame number: <code>dla out --init</code> seeds frame 1, then
+      <code>dla out --to N</code> renders each subsequent frame into
+      <code>out/current.bmp</code>, reusing the same directory so the
+      cluster keeps growing. The directory is wiped automatically once the
+      120-frame sequence finishes, so the next cycle starts from a fresh seed.
+    </p>
+    <div style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <label>Sequence progress</label>
+        <span id="dla-frame-lbl" style="font-size:12px;color:var(--mut)">frame 1 / 120</span>
+      </div>
+      <div class="prog-wrap"><div class="prog-bar" id="dla-prog" style="width:0%"></div></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn bs" onclick="dlaReset()">Reset sequence</button>
+      <button class="btn bp" onclick="generateNow('dla')">Generate DLA frame</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ FRACTAL ============================ -->
+<section class="view" id="view-fractal">
+  <div class="crumb"><a onclick="openPage('home')">&larr; Home</a> / Fractal</div>
+  <div class="card">
+    <h2>Fractal</h2>
+    <p class="hint">Options passed straight through to <code>fractal.x</code>
+      (<code>-fg</code>, <code>-bg</code>, <code>-single</code> /
+      <code>-frames</code>, <code>-state</code>).</p>
+    <div class="row" style="margin-bottom:16px">
+      <div class="field">
+        <label>Mode</label>
+        <select id="frac-mode" onchange="fracSave()">
+          <option value="single">Single frame (-single)</option>
+          <option value="zoom_sequence">Zoom sequence (-state, advances each call)</option>
         </select>
       </div>
     </div>
-    <div class="field" style="margin-bottom:10px">
-      <label>Frames per update</label>
-      <input type="number" id="sch-fpu" min="1" max="50" value="1"
-        onchange="schedSave()">
+    <div class="field" style="margin-bottom:14px">
+      <label>Foreground colour (-fg)</label>
+      <div class="swatches" id="fg-sw"></div>
+      <input type="hidden" id="frac-fg" value="white">
     </div>
-    <div id="countdown" class="countdown inactive">Stopped</div>
-    <div style="font-size:10px;color:var(--mut);margin-top:4px;text-align:center"
-         id="last-fire-lbl"></div>
-    <div style="margin-top:10px">
-      <button class="btn bp" style="width:100%" onclick="triggerNow()">▶ Fire now</button>
+    <div class="field" style="margin-bottom:14px">
+      <label>Background colour (-bg)</label>
+      <div class="swatches" id="bg-sw"></div>
+      <input type="hidden" id="frac-bg" value="black">
+    </div>
+    <div id="zoom-info" style="margin-bottom:14px;display:none">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <label>Zoom step</label>
+        <span id="frac-zoom-lbl" style="font-size:12px;color:var(--mut)">step 0</span>
+      </div>
+      <div class="prog-wrap"><div class="prog-bar" id="frac-prog" style="width:5%"></div></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn bs" id="frac-reset-btn" onclick="fractalReset()" style="display:none">Reset zoom (-state)</button>
+      <button class="btn bp" onclick="generateNow('fractal')">Generate fractal</button>
     </div>
   </div>
+</section>
 
-  <!-- Live status -->
-  <div class="sc">
-    <h3>Live state</h3>
-    <div class="st"><span class="sk">Generator</span><span class="sv" id="ss-gen">—</span></div>
-    <div class="st"><span class="sk">DLA frame</span><span class="sv" id="ss-dlaframe">—</span></div>
-    <div class="st"><span class="sk">Fractal zoom</span><span class="sv" id="ss-fzoom">—</span></div>
-    <div class="st"><span class="sk">Go game</span><span class="sv" id="ss-game">—</span></div>
-    <div class="st"><span class="sk">Go move</span><span class="sv" id="ss-move">—</span></div>
-    <div class="st"><span class="sk">Last push</span><span class="sv" id="ss-last">—</span></div>
-  </div>
-</aside>
+<!-- ============================ GOBAN ============================ -->
+<section class="view" id="view-goban">
+  <div class="crumb"><a onclick="openPage('home')">&larr; Home</a> / Go / Goban</div>
+  <div class="card">
+    <h2>Go / Goban</h2>
 
-<!-- ── MAIN ────────────────────────────────────────────────────────────── -->
-<main class="main">
-
-  <!-- Generate bar (always visible) -->
-  <div class="gen-bar">
-    <div class="gen-info">
-      <strong id="gen-label">Generate &amp; Push</strong>
-      <span id="gen-sub">Select a generator in the sidebar</span>
-    </div>
-    <button class="btn bp" id="gen-btn" style="font-size:15px;padding:12px 28px"
-            onclick="generateNow()">▶ Generate</button>
-  </div>
-
-  <!-- ── DLA panel ── -->
-  <div class="panel active" id="tab-dla">
-    <div class="card">
-      <h2>🌿 DLA — Diffusion-Limited Aggregation</h2>
-      <p style="color:var(--mut);font-size:12px;margin-bottom:16px">
-        Particles randomly walk until they stick to the cluster.
-        Each Generate press advances the sequence one frame.
-      </p>
-      <div class="row" style="margin-bottom:16px">
-        <div class="field">
-          <label>Walkers (particles per step)</label>
-          <input type="number" id="dla-walkers" min="1" max="50" value="5"
-            onchange="schedSave()">
+    <!-- Current game -->
+    <div style="background:var(--sur2);border-radius:8px;padding:14px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+        <div>
+          <div style="font-weight:600;margin-bottom:2px" id="cg-name">No game selected</div>
+          <div style="font-size:11px;color:var(--mut)" id="cg-path">-</div>
         </div>
+        <span id="cg-badge" style="font-size:10px;padding:3px 8px;border-radius:20px;
+          background:var(--acc);color:#fff">RANDOM</span>
       </div>
-      <div style="margin-bottom:16px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-          <label>Sequence progress</label>
-          <span id="dla-frame-lbl" style="font-size:12px;color:var(--mut)">frame 1 / 120</span>
-        </div>
-        <div class="prog-wrap"><div class="prog-bar" id="dla-prog" style="width:0%"></div></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <label>Progress (-move)</label>
+        <span id="cg-move-lbl" style="font-size:12px;color:var(--mut)">- / -</span>
       </div>
-      <div class="btn-row">
-        <button class="btn bs" onclick="dlaReset()">↺ Reset sequence</button>
-        <button class="btn bp" onclick="generateNow()">▶ Generate DLA frame</button>
+      <div class="prog-wrap"><div class="prog-bar" id="cg-prog" style="width:0%"></div></div>
+    </div>
+
+    <!-- Controls -->
+    <div class="row" style="margin-bottom:14px">
+      <div class="field">
+        <label>Game selection</label>
+        <select id="goban-mode" onchange="setGobanMode(this.value)">
+          <option value="random">Random</option>
+          <option value="sequential">Sequential</option>
+          <option value="manual">Manual (pick below)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Jump to move (-move, 0=final)</label>
+        <input type="number" id="goban-move-inp" min="0" value="1">
       </div>
     </div>
-  </div>
 
-  <!-- ── Fractal panel ── -->
-  <div class="panel" id="tab-fractal">
-    <div class="card">
-      <h2>∞ Fractal</h2>
-      <div class="row" style="margin-bottom:16px">
-        <div class="field">
-          <label>Mode</label>
-          <select id="frac-mode" onchange="fracSave()">
-            <option value="single">Single frame</option>
-            <option value="zoom_sequence">Zoom sequence</option>
-          </select>
-        </div>
-      </div>
-      <div class="field" style="margin-bottom:14px">
-        <label>Foreground colour</label>
-        <div class="swatches" id="fg-sw"></div>
-        <input type="hidden" id="frac-fg" value="white">
-      </div>
-      <div class="field" style="margin-bottom:14px">
-        <label>Background colour</label>
-        <div class="swatches" id="bg-sw"></div>
-        <input type="hidden" id="frac-bg" value="black">
-      </div>
-      <div id="zoom-info" style="margin-bottom:14px;display:none">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-          <label>Zoom step</label>
-          <span id="frac-zoom-lbl" style="font-size:12px;color:var(--mut)">step 0</span>
-        </div>
-        <div class="prog-wrap"><div class="prog-bar" id="frac-prog" style="width:5%"></div></div>
-      </div>
-      <div class="btn-row">
-        <button class="btn bs" id="frac-reset-btn" onclick="fractalReset()" style="display:none">↺ Reset zoom</button>
-        <button class="btn bp" onclick="generateNow()">▶ Generate fractal</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Goban panel ── -->
-  <div class="panel" id="tab-goban">
-    <div class="card">
-      <h2>⬡ Go / Goban</h2>
-
-      <!-- Current game -->
-      <div style="background:var(--sur2);border-radius:8px;padding:14px;margin-bottom:16px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-          <div>
-            <div style="font-weight:600;margin-bottom:2px" id="cg-name">No game selected</div>
-            <div style="font-size:11px;color:var(--mut)" id="cg-path">—</div>
+    <!-- Board style -->
+    <details style="margin-bottom:14px" open>
+      <summary style="cursor:pointer;font-size:12px;color:var(--mut);padding:6px 0">
+        Board colours &amp; style
+      </summary>
+      <div style="padding-top:12px">
+        <div class="row">
+          <div class="field">
+            <label>Background (-bg)</label>
+            <select id="goban-bg" onchange="gobanStyleSave()">
+              <option value="white">White</option><option value="black">Black</option>
+            </select>
           </div>
-          <span id="cg-badge" style="font-size:10px;padding:3px 8px;border-radius:20px;
-            background:var(--acc);color:#fff">RANDOM</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-          <label>Progress</label>
-          <span id="cg-move-lbl" style="font-size:12px;color:var(--mut)">— / —</span>
-        </div>
-        <div class="prog-wrap"><div class="prog-bar" id="cg-prog" style="width:0%"></div></div>
-      </div>
-
-      <!-- Controls -->
-      <div class="row" style="margin-bottom:14px">
-        <div class="field">
-          <label>Game selection</label>
-          <select id="goban-mode" onchange="setGobanMode(this.value)">
-            <option value="random">Random</option>
-            <option value="sequential">Sequential</option>
-            <option value="manual">Manual (pick below)</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>Jump to move</label>
-          <input type="number" id="goban-move-inp" min="0" value="1">
-        </div>
-      </div>
-
-      <!-- Board style -->
-      <details style="margin-bottom:14px">
-        <summary style="cursor:pointer;font-size:12px;color:var(--mut);padding:6px 0">
-          Board colours &amp; style ▾
-        </summary>
-        <div style="padding-top:12px">
-          <div class="row">
-            <div class="field">
-              <label>Background</label>
-              <select id="goban-bg" onchange="gobanStyleSave()">
-                <option value="white">White</option><option value="black">Black</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Board colour</label>
-              <select id="goban-board" onchange="gobanStyleSave()">
-                <option value="yellow">Yellow</option><option value="white">White</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>White stones</label>
-              <select id="goban-white" onchange="gobanStyleSave()">
-                <option value="green">Green</option><option value="white">White</option>
-                <option value="blue">Blue</option><option value="red">Red</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Black stones</label>
-              <select id="goban-black" onchange="gobanStyleSave()">
-                <option value="black">Black</option><option value="red">Red</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Grid thickness</label>
-              <select id="goban-grid" onchange="gobanStyleSave()">
-                <option value="1">1</option><option value="2">2</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Last-move marker</label>
-              <select id="goban-highlight" onchange="gobanStyleSave()">
-                <option value="ring">Ring</option><option value="dot">Dot</option>
-                <option value="none">None</option>
-              </select>
-            </div>
+          <div class="field">
+            <label>Board colour (-board)</label>
+            <select id="goban-board" onchange="gobanStyleSave()">
+              <option value="yellow">Yellow</option><option value="white">White</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>White stones (-white-color)</label>
+            <select id="goban-white" onchange="gobanStyleSave()">
+              <option value="green">Green</option><option value="white">White</option>
+              <option value="blue">Blue</option><option value="red">Red</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Black stones (-black-color)</label>
+            <select id="goban-black" onchange="gobanStyleSave()">
+              <option value="black">Black</option><option value="red">Red</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Grid thickness (-grid-thickness)</label>
+            <select id="goban-grid" onchange="gobanStyleSave()">
+              <option value="1">1</option><option value="2">2</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Last-move marker (-highlight)</label>
+            <select id="goban-highlight" onchange="gobanStyleSave()">
+              <option value="ring">Ring</option><option value="dot">Dot</option>
+              <option value="none">None</option>
+            </select>
           </div>
         </div>
-      </details>
-
-      <div class="btn-row" style="margin-bottom:16px">
-        <button class="btn bs" onclick="gobanRestart()">↺ Restart game</button>
-        <button class="btn bs" onclick="gobanSkip()">⏭ Skip game</button>
-        <button class="btn bs" onclick="gobanJumpMove()">⤳ Jump to move</button>
-        <button class="btn bp" onclick="generateNow()">▶ Generate frame</button>
       </div>
+    </details>
 
-      <!-- Game library -->
-      <input class="tsearch" type="text" placeholder="🔍 Search games…"
-        oninput="filterGames(this.value)">
-      <div class="twrap">
-        <table>
-          <thead><tr>
-            <th>#</th><th>Filename</th><th>Collection</th><th>Size</th><th></th>
-          </tr></thead>
-          <tbody id="gtbody"></tbody>
-        </table>
-      </div>
-      <div id="gcnt" style="font-size:11px;color:var(--mut);margin-top:6px"></div>
+    <div class="btn-row" style="margin-bottom:16px">
+      <button class="btn bs" onclick="gobanRestart()">Restart game</button>
+      <button class="btn bs" onclick="gobanSkip()">Skip game</button>
+      <button class="btn bs" onclick="gobanJumpMove()">Jump to move</button>
+      <button class="btn bp" onclick="generateNow('goban')">Generate frame</button>
     </div>
-  </div>
 
-</main>
+    <!-- Game library -->
+    <input class="tsearch" type="text" placeholder="Search games..."
+      oninput="filterGames(this.value)">
+    <div class="twrap">
+      <table>
+        <thead><tr>
+          <th>#</th><th>Filename</th><th>Collection</th><th>Size</th><th></th>
+        </tr></thead>
+        <tbody id="gtbody"></tbody>
+      </table>
+    </div>
+    <div id="gcnt" style="font-size:11px;color:var(--mut);margin-top:6px"></div>
+  </div>
+</section>
+
 </div>
 
 <div id="toast"></div>
 
 <script>
-// ── State ─────────────────────────────────────────────────────────────────────
+// -- State --
 const COLOURS = ['black','white','green','blue','red','yellow','orange'];
+const PAGES = ['home','dla','fractal','goban'];
 const S = {
-  activeTab:   'dla',
-  dlaWalkers:  5,
+  activeTab:   'dla',      // the currently selected *method* (scheduler target)
   fracFg:      'white',
   fracBg:      'black',
   fracMode:    'single',
@@ -422,7 +464,7 @@ const S = {
 };
 let countdownTimer = null;
 
-// ── Toast ─────────────────────────────────────────────────────────────────────
+// -- Toast --
 let tTimer;
 function toast(msg, type='ok'){
   const el=document.getElementById('toast');
@@ -430,15 +472,26 @@ function toast(msg, type='ok'){
   clearTimeout(tTimer); tTimer=setTimeout(()=>el.className='',2800);
 }
 
-// ── Tab switching ─────────────────────────────────────────────────────────────
-function switchTab(name, btn){
-  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-  document.getElementById('tab-'+name).classList.add('active');
-  btn.classList.add('active');
-  S.activeTab = name;
+// -- Page navigation (hash routing: #/home #/dla #/fractal #/goban) --
+function openPage(name){
+  if(!PAGES.includes(name)) name='home';
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.getElementById('view-'+name).classList.add('active');
+  if(location.hash!=='#/'+name) location.hash='#/'+name;
+  window.scrollTo(0,0);
+}
+window.addEventListener('hashchange', ()=>{
+  const name=(location.hash||'#/home').replace('#/','');
+  openPage(name);
+});
+
+// -- Method selection (home page cards) --
+function selectMethod(name){
+  S.activeTab=name;
+  document.querySelectorAll('.method-card').forEach(c=>c.classList.remove('sel'));
+  document.getElementById('mc-'+name).classList.add('sel');
   updateGenBar();
-  schedSave();   // update active_generator when tab changes
+  schedSave();   // persist active_generator
 }
 
 function updateGenBar(){
@@ -448,24 +501,26 @@ function updateGenBar(){
     goban:  ['Generate Go frame',     'Advances the game one move'],
   };
   const [main,sub]=labels[S.activeTab]||['Generate',''];
-  document.getElementById('gen-label').textContent=main;
-  document.getElementById('gen-sub').textContent=sub;
+  const lbl=document.getElementById('gen-label');
+  const sb=document.getElementById('gen-sub');
+  if(lbl) lbl.textContent=main;
+  if(sb) sb.textContent=sub;
   document.getElementById('gen-active-badge').textContent=
     S.activeTab.charAt(0).toUpperCase()+S.activeTab.slice(1);
 }
 
-// ── Health check ──────────────────────────────────────────────────────────────
+// -- Health check --
 async function checkHealth(){
   try{
     const d=await(await fetch('/health')).json();
     const ok=Object.values(d.generators||{}).every(Boolean);
     document.getElementById('hdot').className='dot '+(ok?'ok':'err');
     document.getElementById('htxt').textContent=
-      Object.entries(d.generators||{}).map(([k,v])=>k+':'+(v?'✓':'✗')).join('  ');
+      Object.entries(d.generators||{}).map(([k,v])=>k+':'+(v?'OK':'X')).join('  ');
   }catch{document.getElementById('hdot').className='dot err';}
 }
 
-// ── Countdown timer ───────────────────────────────────────────────────────────
+// -- Countdown timer --
 function startCountdown(){
   clearInterval(countdownTimer);
   const el=document.getElementById('countdown');
@@ -482,7 +537,7 @@ function startCountdown(){
   countdownTimer=setInterval(tick,1000);
 }
 
-// ── Status polling ────────────────────────────────────────────────────────────
+// -- Status polling --
 async function poll(){
   try{
     const d=await(await fetch('/status')).json();
@@ -491,23 +546,27 @@ async function poll(){
     const dlaf=d.dla?.next_frame||1;
     document.getElementById('dla-prog').style.width=((dlaf-1)/120*100)+'%';
     document.getElementById('dla-frame-lbl').textContent=`frame ${dlaf} / 120`;
+    document.getElementById('mc-dla-stat').textContent=`frame ${dlaf} / 120`;
 
     // Fractal
     const fz=d.fractal?.zoom_step||0;
     S.fracZoom=fz;
     document.getElementById('frac-zoom-lbl').textContent='step '+fz;
     document.getElementById('frac-prog').style.width=Math.min(fz*5,95)+'%';
+    document.getElementById('mc-fractal-stat').textContent='step '+fz;
 
     // Goban
     const gs=d.goban||{};
     S.currentId=gs.current_game_id;
     document.getElementById('goban-mode').value=gs.selection_mode||'random';
     document.getElementById('cg-name').textContent=gs.game_name||'No game selected';
-    document.getElementById('cg-path').textContent=gs.game_path||'—';
+    document.getElementById('cg-path').textContent=gs.game_path||'-';
     document.getElementById('cg-badge').textContent=(gs.selection_mode||'random').toUpperCase();
     const pct=gs.total_moves>0?Math.round(gs.current_move/gs.total_moves*100):0;
     document.getElementById('cg-prog').style.width=pct+'%';
     document.getElementById('cg-move-lbl').textContent=
+      `move ${gs.current_move||0} / ${gs.total_moves||0}`;
+    document.getElementById('mc-goban-stat').textContent=
       `move ${gs.current_move||0} / ${gs.total_moves||0}`;
     // Highlight current game in table
     document.querySelectorAll('#gtbody tr').forEach(tr=>
@@ -519,12 +578,17 @@ async function poll(){
     S.schInterval=sch.interval_seconds||300;
     S.nextFireTs=sch.next_fire||null;
     S.lastFireTs=sch.last_fire||null;
+    S.activeTab=sch.active_generator||S.activeTab;
     document.getElementById('sch-toggle').checked=S.schEnabled;
     document.getElementById('sch-interval').value=S.schInterval;
     document.getElementById('sch-fpu').value=sch.frames_per_update||1;
-    document.getElementById('dla-walkers').value=sch.dla_walkers||5;
     document.getElementById('last-fire-lbl').textContent=
       S.lastFireTs ? 'Last: '+new Date(S.lastFireTs).toLocaleTimeString() : '';
+
+    document.querySelectorAll('.method-card').forEach(c=>c.classList.remove('sel'));
+    const mc=document.getElementById('mc-'+S.activeTab);
+    if(mc) mc.classList.add('sel');
+    updateGenBar();
 
     // Restore fractal/goban settings
     setSwatchSel('fg-sw','frac-fg', sch.fractal_fg||'white');
@@ -548,36 +612,35 @@ async function poll(){
       });
     }
 
-    // Sidebar stats
-    document.getElementById('ss-gen').textContent=d.art_type||'—';
+    // Live status card
+    document.getElementById('ss-gen').textContent=S.activeTab||'-';
     document.getElementById('ss-dlaframe').textContent=`${dlaf} / 120`;
     document.getElementById('ss-fzoom').textContent='step '+fz;
-    document.getElementById('ss-game').textContent=gs.game_name||'—';
+    document.getElementById('ss-game').textContent=gs.game_name||'-';
     document.getElementById('ss-move').textContent=
       `${gs.current_move||0} / ${gs.total_moves||0}`;
     document.getElementById('ss-last').textContent=
-      S.lastFireTs?new Date(S.lastFireTs).toLocaleTimeString():'—';
+      S.lastFireTs?new Date(S.lastFireTs).toLocaleTimeString():'-';
 
     startCountdown();
 
   }catch(e){console.warn('poll error',e);}
 }
 
-// ── Generate ──────────────────────────────────────────────────────────────────
-async function generateNow(){
-  const btn=document.getElementById('gen-btn');
-  btn.disabled=true; btn.textContent='⏳…';
+// -- Generate --
+async function generateNow(methodOverride){
+  const method = methodOverride || S.activeTab;
+  const btn = (event && event.currentTarget) ? event.currentTarget
+              : document.getElementById('gen-btn');
+  const prevText = btn.textContent;
+  btn.disabled=true; btn.textContent='...';
 
-  const tab=S.activeTab;
-  const payload={art_type:tab};
-
-  if(tab==='dla'){
-    payload.walkers=parseInt(document.getElementById('dla-walkers').value)||5;
-  } else if(tab==='fractal'){
-    payload.mb_fg=document.getElementById('frac-fg').value;
-    payload.mb_bg=document.getElementById('frac-bg').value;
-    payload.mb_mode=document.getElementById('frac-mode').value;
-  } else if(tab==='goban'){
+  const payload={art_type:method};
+  if(method==='fractal'){
+    payload.fractal_fg=document.getElementById('frac-fg').value;
+    payload.fractal_bg=document.getElementById('frac-bg').value;
+    payload.fractal_mode=document.getElementById('frac-mode').value;
+  } else if(method==='goban'){
     payload.goban_source='file';
     payload.goban_bg=document.getElementById('goban-bg').value;
     payload.goban_board=document.getElementById('goban-board').value;
@@ -591,22 +654,22 @@ async function generateNow(){
     const r=await fetch('/ui/generate',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const d=await r.json();
-    if(d.status==='ok') toast('✓ Pushed to display','ok');
-    else toast('✗ '+(d.error||'Failed'),'err');
-  }catch(e){toast('✗ '+e.message,'err');}
+    if(d.status==='ok') toast('Pushed to display','ok');
+    else toast('Error: '+(d.error||'Failed'),'err');
+  }catch(e){toast('Error: '+e.message,'err');}
   finally{
-    btn.disabled=false; btn.textContent='▶ Generate';
+    btn.disabled=false; btn.textContent=prevText;
     poll();
   }
 }
 
-// ── DLA ───────────────────────────────────────────────────────────────────────
+// -- DLA --
 async function dlaReset(){
   await fetch('/generate/dla/reset',{method:'POST'});
   toast('DLA sequence reset','ok'); poll();
 }
 
-// ── Fractal ───────────────────────────────────────────────────────────────────
+// -- Fractal --
 function buildSwatches(cid, hid, selected){
   const c=document.getElementById(cid);
   c.innerHTML='';
@@ -645,11 +708,11 @@ async function fractalReset(){
   toast('Fractal zoom reset','ok'); poll();
 }
 
-// ── Goban ─────────────────────────────────────────────────────────────────────
+// -- Goban --
 async function setGobanMode(mode){
   await fetch('/goban/mode',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
-  toast('Goban mode → '+mode,'ok'); schedSave(); poll();
+  toast('Goban mode -> '+mode,'ok'); schedSave(); poll();
 }
 async function gobanRestart(){
   await fetch('/goban/restart',{method:'POST'});
@@ -673,7 +736,7 @@ async function pickGame(id){
 }
 function gobanStyleSave(){ schedSave(); }
 
-// ── Scheduler ─────────────────────────────────────────────────────────────────
+// -- Scheduler --
 function applyPreset(v){
   if(!v) return;
   document.getElementById('sch-interval').value=v;
@@ -695,7 +758,6 @@ async function schedSave(extra={}){
     active_generator:   S.activeTab,
     interval_seconds:   parseInt(document.getElementById('sch-interval').value)||300,
     frames_per_update:  parseInt(document.getElementById('sch-fpu').value)||1,
-    dla_walkers:        parseInt(document.getElementById('dla-walkers').value)||5,
     fractal_fg:         document.getElementById('frac-fg').value,
     fractal_bg:         document.getElementById('frac-bg').value,
     fractal_mode:       document.getElementById('frac-mode').value,
@@ -719,7 +781,7 @@ async function schedSave(extra={}){
   }
 }
 
-// ── Game table ────────────────────────────────────────────────────────────────
+// -- Game table --
 async function loadGames(){
   try{
     const r=await fetch('/goban/games');
@@ -753,22 +815,23 @@ function renderGames(){
           style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
         ${g.filename}</td>
       <td style="color:var(--mut);font-size:11px;max-width:130px;overflow:hidden;
-          text-overflow:ellipsis;white-space:nowrap">${g.original_directory||'—'}</td>
+          text-overflow:ellipsis;white-space:nowrap">${g.original_directory||'-'}</td>
       <td style="color:var(--mut);font-size:11px">${Math.round(g.size_bytes/1024)}KB</td>
-      <td><button class="btn bs play-btn" onclick="pickGame(${g.id})">▶ Play</button></td>`;
+      <td><button class="btn bs play-btn" onclick="pickGame(${g.id})">Play</button></td>`;
     tb.appendChild(tr);
   });
   if(S.filtered.length>200){
     const tr=document.createElement('tr');
     tr.innerHTML=`<td colspan="5" style="color:var(--mut);text-align:center;padding:8px">
-      …${S.filtered.length-200} more — refine search</td>`;
+      ...${S.filtered.length-200} more - refine search</td>`;
     tb.appendChild(tr);
   }
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// -- Init --
 buildSwatches('fg-sw','frac-fg', S.fracFg);
 buildSwatches('bg-sw','frac-bg', S.fracBg);
+openPage((location.hash||'#/home').replace('#/',''));
 updateGenBar();
 checkHealth();
 loadGames();
@@ -801,15 +864,13 @@ def ui_generate():
 
     try:
         if art_type == "dla":
-            gen_resp = rq.post(f"{base}/generate/dla", json={
-                "walkers": data.get("walkers", 5),
-            }, timeout=180)
+            gen_resp = rq.post(f"{base}/generate/dla", json={}, timeout=180)
         elif art_type == "fractal":
             gen_resp = rq.post(f"{base}/generate/fractal", json={
-                "fg":        data.get("mb_fg", "white"),
-                "bg":        data.get("mb_bg", "black"),
-                "single":    data.get("mb_mode", "single") == "single",
-                "has_state": data.get("mb_mode", "single") == "zoom_sequence",
+                "fg":        data.get("fractal_fg", "white"),
+                "bg":        data.get("fractal_bg", "black"),
+                "single":    data.get("fractal_mode", "single") == "single",
+                "has_state": data.get("fractal_mode", "single") == "zoom_sequence",
             }, timeout=180)
         elif art_type == "goban":
             gen_resp = rq.post(f"{base}/generate/goban", json={

@@ -11,7 +11,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .art_generator import (
     DLA_SEQUENCE_LENGTH,
-    MANDELBROT_COLOURS,
+    FRACTAL_COLOURS,
     GOBAN_BG_COLOURS,
     GOBAN_BOARD_COLOURS,
     GOBAN_WHITE_STONE_COLOURS,
@@ -19,21 +19,21 @@ from .art_generator import (
     GOBAN_GRID_THICKNESS,
     GOBAN_HIGHLIGHT_MODES,
     DLAParams,
-    MandelbrotParams,
+    FractalParams,
     GobanParams,
     generate_dla,
-    generate_mandelbrot,
+    generate_fractal,
     generate_goban,
 )
 from .const import (
     ART_TYPE_DLA,
-    ART_TYPE_MANDELBROT,
+    ART_TYPE_FRACTAL,
     ART_TYPE_GOBAN,
     ART_TYPES,
     DOMAIN,
     GOBAN_SOURCES,
     IMAGE_SOURCES,
-    MANDELBROT_MODES,
+    FRACTAL_MODES,
     SOURCE_CAMERA,
     SOURCE_GENERATIVE,
     SOURCE_URL,
@@ -42,7 +42,7 @@ from .const import (
     SERVICE_ROTATE,
 )
 from .coordinator import PhotopainterArtCoordinator
-from .generative_art import _mandelbrot_manager
+from .generative_art import _fractal_manager
 from . import sgf_library
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,10 +68,10 @@ SERVICE_GENERATE_ART_SCHEMA = vol.Schema(
             int, vol.Range(min=1, max=DLA_SEQUENCE_LENGTH)
         ),
 
-        # ── Mandelbrot ────────────────────────────────────────────────────────
-        vol.Optional("mb_fg",   default="white"): vol.In(MANDELBROT_COLOURS),
-        vol.Optional("mb_bg",   default="black"): vol.In(MANDELBROT_COLOURS),
-        vol.Optional("mb_mode", default="single"): vol.In(MANDELBROT_MODES),
+        # ── Fractal ────────────────────────────────────────────────────────
+        vol.Optional("fractal_fg",   default="white"): vol.In(FRACTAL_COLOURS),
+        vol.Optional("fractal_bg",   default="black"): vol.In(FRACTAL_COLOURS),
+        vol.Optional("fractal_mode", default="single"): vol.In(FRACTAL_MODES),
 
         # ── Goban ─────────────────────────────────────────────────────────────
         vol.Optional("goban_source",     default="library"): vol.In(GOBAN_SOURCES),
@@ -223,20 +223,20 @@ async def async_register_services(hass: HomeAssistant, coordinator: Photopainter
             _LOGGER.info("DLA service: rendering frame %d", frame)
             return await generate_dla(DLAParams(frame=frame))
 
-        if art_type == ART_TYPE_MANDELBROT:
-            mode   = data.get("mb_mode", "single")
+        if art_type == ART_TYPE_FRACTAL:
+            mode   = data.get("fractal_mode", "single")
             is_seq = (mode == "zoom_sequence")
             entry_id = next(iter(hass.data.get(DOMAIN, {})), None)
-            params = MandelbrotParams(
-                fg         = data.get("mb_fg",   "white"),
-                bg         = data.get("mb_bg",   "black"),
+            params = FractalParams(
+                fg         = data.get("fractal_fg",   "white"),
+                bg         = data.get("fractal_bg",   "black"),
                 single     = not is_seq,
                 frames     = 1,
                 state_path = "sidecar" if is_seq else "",
             )
-            image_bytes = await generate_mandelbrot(params)
+            image_bytes = await generate_fractal(params)
             if is_seq and entry_id:
-                _mandelbrot_manager(entry_id).advance()
+                _fractal_manager(entry_id).advance()
             return image_bytes
 
         if art_type == ART_TYPE_GOBAN:

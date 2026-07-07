@@ -6,7 +6,7 @@ GET  /health
 GET  /status                      full state snapshot, polled by UI every 5s
 
 ── DLA ────────────────────────────────────────────────────────────────────────
-POST /generate/dla                { "frame": N, "walkers": N }
+POST /generate/dla                { "frame": N }
 POST /generate/dla/reset          {}
 
 ── Fractal ────────────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ POST /goban/move                  { "move": N }
 
 ── Scheduler ──────────────────────────────────────────────────────────────────
 POST /scheduler/settings          { enabled, interval_seconds, frames_per_update,
-                                    active_generator, dla_walkers,
+                                    active_generator,
                                     fractal_fg, fractal_bg, fractal_mode,
                                     goban_bg, goban_board, goban_white_color,
                                     goban_black_color, goban_grid_thickness,
@@ -69,7 +69,7 @@ app.register_blueprint(ui_blueprint)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DLA_CMD         = os.environ.get("DLA_CMD",         "dla.x")
-FRACTAL_CMD     = os.environ.get("FRACTAL_CMD",     "fractalgen.x")
+FRACTAL_CMD     = os.environ.get("FRACTAL_CMD",     "fractal.x")
 GOBAN_CMD       = os.environ.get("GOBAN_CMD",       "goban.x")
 DEFAULT_WIDTH   = int(os.environ.get("DISPLAY_WIDTH",  "600"))
 DEFAULT_HEIGHT  = int(os.environ.get("DISPLAY_HEIGHT", "448"))
@@ -79,6 +79,7 @@ PORT            = int(os.environ.get("PORT", "8765"))
 
 FRACTAL_STATE_FILE = STATE_DIR / "fractal_state.json"
 SGF_MAX_BYTES      = 2 * 1024 * 1024
+DLA_SEQUENCE_LENGTH = 120
 
 # ── Shared state ──────────────────────────────────────────────────────────────
 _goban = GobanStateManager()
@@ -118,9 +119,7 @@ def _scheduler_generate(generator: str, state: dict) -> bytes | None:
 
     try:
         if generator == "dla":
-            resp = requests.post(f"{base}/generate/dla", json={
-                "walkers": state.get("dla_walkers", 5),
-            }, timeout=180)
+            resp = requests.post(f"{base}/generate/dla", json={}, timeout=180)
 
         elif generator == "fractal":
             resp = requests.post(f"{base}/generate/fractal", json={
@@ -218,7 +217,6 @@ def status():
             "last_fire":         sch.get("last_fire"),
             "next_fire":         sch.get("next_fire"),
             # Per-generator options (for UI to restore)
-            "dla_walkers":           sch.get("dla_walkers",           5),
             "fractal_fg":            sch.get("fractal_fg",            "white"),
             "fractal_bg":            sch.get("fractal_bg",            "black"),
             "fractal_mode":          sch.get("fractal_mode",          "single"),
@@ -236,56 +234,62 @@ def status():
 
 # ── DLA ───────────────────────────────────────────────────────────────────────
 
+DLA_WORK_DIR = STATE_DIR / "dla_work"
+
+
 @app.post("/generate/dla")
 def generate_dla():
+    """Advance the DLA sequence by one frame.
+
+    dla.x keeps its own aggregation state as files inside the working
+    directory ("out"), so that directory must persist *between* calls —
+    it is only (re)created on frame 1 and wiped once the 120-frame
+    sequence completes, ready for the next --init.
+
+        ./dla out --init        # frame 1: seed the cluster
+        ./dla out --to N        # frames 2..120: grow + render out/current.bmp
+    """
     global _dla_next_frame, _last_source, _last_art_type
 
     if not _available(DLA_CMD):
         return jsonify({"error": f"{DLA_CMD!r} not found"}), 503
 
-    data    = request.get_json(force=True) or {}
-    raw     = data.get("frame", None)
+    data = request.get_json(force=True) or {}
+    raw  = data.get("frame", None)
     try:
         frame = int(raw) if raw not in (None, "__next__") else _dla_next_frame
     except (ValueError, TypeError):
         frame = _dla_next_frame
 
-    walkers = int(data.get("walkers", _scheduler.state.get("dla_walkers", 5)))
+    if not (1 <= frame <= DLA_SEQUENCE_LENGTH):
+        return jsonify({"error": f"frame must be 1–{DLA_SEQUENCE_LENGTH}"}), 400
 
-    if not (1 <= frame <= 120):
-        return jsonify({"error": "frame must be 1–120"}), 400
-
-    out_dir = tempfile.mkdtemp(prefix="dla_")
     try:
         if frame == 1:
-            # Pass --walkers on --init if the binary supports it;
-            # fall back silently if it doesn't accept that flag.
-            init_argv = [DLA_CMD, out_dir, "--init", "--walkers", str(walkers)]
-            try:
-                _run(init_argv)
-            except RuntimeError as exc:
-                if "walkers" in str(exc).lower() or "flag" in str(exc).lower():
-                    _LOGGER.warning(
-                        "dla.x does not support --walkers, retrying without it"
-                    )
-                    _run([DLA_CMD, out_dir, "--init"])
-                else:
-                    raise
+            # Starting a new sequence: wipe any leftover state and re-init.
+            shutil.rmtree(DLA_WORK_DIR, ignore_errors=True)
+            DLA_WORK_DIR.mkdir(parents=True, exist_ok=True)
+            _run([DLA_CMD, str(DLA_WORK_DIR), "--init"])
 
-        _run([DLA_CMD, out_dir, "--to", str(frame)])
+        if not DLA_WORK_DIR.exists():
+            # Defensive: frame > 1 requested but no sequence in progress.
+            DLA_WORK_DIR.mkdir(parents=True, exist_ok=True)
+            _run([DLA_CMD, str(DLA_WORK_DIR), "--init"])
 
-        bmp = Path(out_dir) / "latest_display.bmp"
+        _run([DLA_CMD, str(DLA_WORK_DIR), "--to", str(frame)])
+
+        bmp = DLA_WORK_DIR / "current.bmp"
         if not bmp.exists() or bmp.stat().st_size == 0:
-            return jsonify({"error": "DLA produced no output"}), 500
+            return jsonify({"error": "dla.x produced no output"}), 500
 
         data_bytes = bmp.read_bytes()
-        _dla_next_frame = (frame % 120) + 1
+        _dla_next_frame = (frame % DLA_SEQUENCE_LENGTH) + 1
         _last_source    = "generative"
         _last_art_type  = "dla"
 
         _LOGGER.info(
-            "DLA: %d bytes  frame=%d  walkers=%d  next=%d",
-            len(data_bytes), frame, walkers, _dla_next_frame,
+            "DLA: %d bytes  frame=%d/%d  next=%d",
+            len(data_bytes), frame, DLA_SEQUENCE_LENGTH, _dla_next_frame,
         )
         return Response(data_bytes, mimetype="image/bmp")
 
@@ -293,13 +297,17 @@ def generate_dla():
         _LOGGER.error("DLA failed: %s", exc)
         return jsonify({"error": str(exc)}), 500
     finally:
-        shutil.rmtree(out_dir, ignore_errors=True)
+        if frame >= DLA_SEQUENCE_LENGTH:
+            # Sequence complete — wipe the working directory so the next
+            # cycle starts clean with a fresh --init.
+            shutil.rmtree(DLA_WORK_DIR, ignore_errors=True)
 
 
 @app.post("/generate/dla/reset")
 def dla_reset():
     global _dla_next_frame
     _dla_next_frame = 1
+    shutil.rmtree(DLA_WORK_DIR, ignore_errors=True)
     return jsonify({"status": "reset", "next_frame": 1})
 
 
@@ -498,7 +506,6 @@ def scheduler_settings():
     data = request.get_json(force=True) or {}
     allowed = {
         "enabled", "interval_seconds", "frames_per_update", "active_generator",
-        "dla_walkers",
         "fractal_fg", "fractal_bg", "fractal_mode",
         "goban_bg", "goban_board", "goban_white_color", "goban_black_color",
         "goban_grid_thickness", "goban_highlight", "goban_mode",

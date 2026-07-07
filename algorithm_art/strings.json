@@ -62,22 +62,22 @@
         },
         "art_type": {
           "name": "Art type",
-          "description": "Which generator to use: dla, mandelbrot, or goban."
+          "description": "Which generator to use: dla, fractal, or goban."
         },
         "dla_frame": {
           "name": "DLA – Frame number",
           "description": "Which frame in the DLA sequence to render (1–120)."
         },
-        "mb_fg": {
-          "name": "Mandelbrot – Foreground colour",
+        "fractal_fg": {
+          "name": "Fractal – Foreground colour",
           "description": "Colour used for the fractal detail."
         },
-        "mb_bg": {
-          "name": "Mandelbrot – Background colour",
+        "fractal_bg": {
+          "name": "Fractal – Background colour",
           "description": "Colour used for the background."
         },
-        "mb_mode": {
-          "name": "Mandelbrot – Mode",
+        "fractal_mode": {
+          "name": "Fractal – Mode",
           "description": "Single frame or advancing zoom sequence."
         },
         "goban_source": {
