@@ -20,6 +20,7 @@ export DISPLAY_HEIGHT
 PHOTOFRAME_HOST=$(bashio::config 'photoframe_host')
 export PHOTOFRAME_HOST
 export STATE_DIR="/data/state"
+export SGF_DIR="/data/go_sgf"
 
 mkdir -p /data/state
 
