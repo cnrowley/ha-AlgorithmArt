@@ -1,7 +1,7 @@
 """Goban game state manager for AlgorithmArt sidecar.
 
 Tracks the current game and move position across Generate calls.
-State is persisted to /data/state/goban_state.json so it survives
+State is persisted to /app/state/goban_state.json so it survives
 container restarts.
 """
 
@@ -19,7 +19,7 @@ _LOGGER = logging.getLogger("algorithm_art.goban_state")
 _LOGGER.warning("goban_state.py imported")
 
 # Where game files live inside the container.
-SGF_DIR = Path(os.environ.get("SGF_DIR", "/data/go_sgf"))
+SGF_DIR = Path(os.environ.get("SGF_DIR", "/app/go_sgf"))
 STATE_FILE = Path("/data/state/goban_state.json")
 DIR_FILE = SGF_DIR / "sgf_directory.py"
 

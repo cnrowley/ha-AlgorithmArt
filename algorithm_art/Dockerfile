@@ -53,7 +53,7 @@ COPY main.py /app/main.py
 COPY services.py /app/services.py
 
 # SGF game library
-COPY data/go_sgf /data/go_sgf
+COPY data/go_sgf /app/go_sgf
 
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh
