@@ -46,6 +46,11 @@ COPY art_generator.py /app/art_generator.py
 COPY goban_state.py   /app/goban_state.py
 COPY scheduler.py     /app/scheduler.py
 COPY web_ui.py        /app/web_ui.py
+COPy sgf_directory.py /app/sgf_directory.py
+COPY const.py /app/const.py
+COPY coordinator.py /app/coordinator.py
+COPY main.py /app/main.py
+COPY services.py /app/services.py
 
 # SGF game library
 COPY data/go_sgf /data/go_sgf
