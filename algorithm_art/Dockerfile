@@ -11,7 +11,7 @@ RUN go build -o /out/dla.x .
 
 WORKDIR /build/fractal
 COPY src/fractal/ ./
-RUN go build -o /out/fractalgen.x .
+RUN go build -o /out/fractal.x .
 
 WORKDIR /build/goban
 COPY src/goban/ ./
@@ -31,7 +31,7 @@ RUN pip3 install --no-cache-dir --break-system-packages flask requests
 
 # Go binaries built above
 COPY --from=builder /out/dla.x        /usr/local/bin/dla.x
-COPY --from=builder /out/fractalgen.x /usr/local/bin/fractalgen.x
+COPY --from=builder /out/fractal.x /usr/local/bin/fractal.x
 COPY --from=builder /out/goban.x      /usr/local/bin/goban.x
 
 RUN chmod +x \
