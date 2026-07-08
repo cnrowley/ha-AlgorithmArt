@@ -443,7 +443,7 @@ func main() {
         }
     }
 
-    bmpPath := filepath.Join(outDir, "latest_display.bmp")
+    bmpPath := filepath.Join(outDir, "current.bmp")
     if err := writeBMP24(bmpPath, img); err != nil {
         fmt.Fprintln(os.Stderr, "Failed to write BMP:", err)
         os.Exit(1)
