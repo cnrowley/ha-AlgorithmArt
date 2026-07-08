@@ -47,6 +47,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import requests
@@ -59,7 +60,7 @@ from scheduler import Scheduler, INTERVAL_PRESETS
 from web_ui import ui as ui_blueprint
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 _LOGGER = logging.getLogger("algorithm_art")
@@ -96,18 +97,86 @@ def _available(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
-def _run(argv: list[str]) -> None:
-    _LOGGER.info("Running: %s", " ".join(str(a) for a in argv))
-    result = subprocess.run(
-        [str(a) for a in argv],
-        capture_output=True,
-        timeout=120,
-    )
-    if result.returncode != 0:
-        stderr = result.stderr.decode(errors="replace").strip()
-        raise RuntimeError(
-            f"Command failed (exit {result.returncode}): {argv[0]!r}\n{stderr}"
+def _run(argv: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
+    """Run a generator binary and return the CompletedProcess.
+
+    Always logs the command, exit code, elapsed time, and stdout/stderr
+    (truncated) so that "ran fine but produced nothing useful" failures are
+    diagnosable from the add-on log, not just "command failed" ones.
+    """
+    argv_str = [str(a) for a in argv]
+    cmd_repr = " ".join(argv_str)
+    _LOGGER.info("Running: %s", cmd_repr)
+    start = time.monotonic()
+
+    try:
+        result = subprocess.run(argv_str, capture_output=True, timeout=timeout)
+    except FileNotFoundError as exc:
+        _LOGGER.error("Command not found: %r (%s)", argv_str[0], exc)
+        raise RuntimeError(f"{argv_str[0]!r} not found on PATH: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        _LOGGER.error(
+            "Command timed out after %ss: %s\nstdout so far: %s\nstderr so far: %s",
+            timeout, cmd_repr,
+            _truncate(exc.stdout), _truncate(exc.stderr),
         )
+        raise RuntimeError(f"{argv_str[0]!r} timed out after {timeout}s") from exc
+
+    elapsed = time.monotonic() - start
+    stdout = result.stdout.decode(errors="replace").strip()
+    stderr = result.stderr.decode(errors="replace").strip()
+
+    _LOGGER.debug(
+        "Finished in %.2fs (exit %d): %s\nstdout: %s\nstderr: %s",
+        elapsed, result.returncode, cmd_repr, _truncate(stdout), _truncate(stderr),
+    )
+
+    if result.returncode != 0:
+        _LOGGER.error(
+            "Command failed (exit %d, %.2fs): %s\nstdout: %s\nstderr: %s",
+            result.returncode, elapsed, cmd_repr, _truncate(stdout), _truncate(stderr),
+        )
+        detail = stderr or stdout or "(no output on stdout/stderr)"
+        raise RuntimeError(
+            f"Command failed (exit {result.returncode}): {argv_str[0]!r}\n{detail}"
+        )
+
+    return result
+
+
+def _truncate(text, limit: int = 4000) -> str:
+    if text is None:
+        return "(none)"
+    if isinstance(text, bytes):
+        text = text.decode(errors="replace")
+    text = text.strip()
+    if not text:
+        return "(empty)"
+    return text if len(text) <= limit else text[:limit] + f"... [truncated, {len(text)} chars total]"
+
+
+def _log_dir(path, label: str) -> None:
+    """Log a directory's contents (name, size, mtime) for diagnostics."""
+    p = Path(path)
+    if not p.exists():
+        _LOGGER.error("%s: directory does not exist: %s", label, p)
+        return
+    try:
+        entries = sorted(p.iterdir())
+    except Exception as exc:
+        _LOGGER.error("%s: could not list %s: %s", label, p, exc)
+        return
+    if not entries:
+        _LOGGER.warning("%s: directory is empty: %s", label, p)
+        return
+    lines = []
+    for e in entries:
+        try:
+            st = e.stat()
+            lines.append(f"  {e.name}  {st.st_size}B  mtime={st.st_mtime:.0f}")
+        except OSError as exc:
+            lines.append(f"  {e.name}  <stat failed: {exc}>")
+    _LOGGER.info("%s: contents of %s:\n%s", label, p, "\n".join(lines))
 
 
 # ── Scheduler generate function ───────────────────────────────────────────────
@@ -269,18 +338,44 @@ def generate_dla():
             # Starting a new sequence: wipe any leftover state and re-init.
             shutil.rmtree(DLA_WORK_DIR, ignore_errors=True)
             DLA_WORK_DIR.mkdir(parents=True, exist_ok=True)
-            _run([DLA_CMD, str(DLA_WORK_DIR), "--init"])
+            init_result = _run([DLA_CMD, str(DLA_WORK_DIR), "--init"])
+            _LOGGER.debug(
+                "DLA --init stdout: %s\nDLA --init stderr: %s",
+                _truncate(init_result.stdout), _truncate(init_result.stderr),
+            )
 
         if not DLA_WORK_DIR.exists():
             # Defensive: frame > 1 requested but no sequence in progress.
+            _LOGGER.warning(
+                "DLA: frame=%d requested but %s is missing — re-initialising",
+                frame, DLA_WORK_DIR,
+            )
             DLA_WORK_DIR.mkdir(parents=True, exist_ok=True)
             _run([DLA_CMD, str(DLA_WORK_DIR), "--init"])
 
-        _run([DLA_CMD, str(DLA_WORK_DIR), "--to", str(frame)])
+        to_result = _run([DLA_CMD, str(DLA_WORK_DIR), "--to", str(frame)])
+        _LOGGER.debug(
+            "DLA --to %d stdout: %s\nDLA --to %d stderr: %s",
+            frame, _truncate(to_result.stdout), frame, _truncate(to_result.stderr),
+        )
 
         bmp = DLA_WORK_DIR / "current.bmp"
         if not bmp.exists() or bmp.stat().st_size == 0:
-            return jsonify({"error": "dla.x produced no output"}), 500
+            _LOGGER.error(
+                "DLA: expected %s after 'dla.x %s --to %d' (exit %d) but it is %s",
+                bmp, DLA_WORK_DIR, frame, to_result.returncode,
+                "missing" if not bmp.exists() else "empty (0 bytes)",
+            )
+            _log_dir(DLA_WORK_DIR, "DLA")
+            _LOGGER.error(
+                "DLA --to %d stdout: %s\nDLA --to %d stderr: %s",
+                frame, _truncate(to_result.stdout), frame, _truncate(to_result.stderr),
+            )
+            return jsonify({
+                "error": "dla.x produced no output",
+                "detail": f"expected {bmp} after --to {frame} (exit {to_result.returncode}); "
+                          f"see add-on log for stdout/stderr and directory listing",
+            }), 500
 
         data_bytes = bmp.read_bytes()
         _dla_next_frame = (frame % DLA_SEQUENCE_LENGTH) + 1
@@ -294,8 +389,13 @@ def generate_dla():
         return Response(data_bytes, mimetype="image/bmp")
 
     except RuntimeError as exc:
-        _LOGGER.error("DLA failed: %s", exc)
+        _LOGGER.error("DLA failed (frame=%d): %s", frame, exc)
+        _log_dir(DLA_WORK_DIR, "DLA")
         return jsonify({"error": str(exc)}), 500
+    except Exception as exc:
+        _LOGGER.error("DLA unexpected error (frame=%d): %s", frame, exc, exc_info=True)
+        _log_dir(DLA_WORK_DIR, "DLA")
+        return jsonify({"error": f"Unexpected error: {exc}"}), 500
     finally:
         if frame >= DLA_SEQUENCE_LENGTH:
             # Sequence complete — wipe the working directory so the next
@@ -334,6 +434,15 @@ def generate_fractal():
     try:
         if has_state and FRACTAL_STATE_FILE.exists():
             shutil.copy2(FRACTAL_STATE_FILE, state_in)
+            _LOGGER.debug(
+                "Fractal: reusing zoom state from %s (%d bytes)",
+                FRACTAL_STATE_FILE, FRACTAL_STATE_FILE.stat().st_size,
+            )
+        elif has_state:
+            _LOGGER.info(
+                "Fractal: zoom_sequence requested but no prior state at %s — "
+                "starting a fresh zoom", FRACTAL_STATE_FILE,
+            )
 
         argv = [
             FRACTAL_CMD,
@@ -350,11 +459,29 @@ def generate_fractal():
         if has_state and state_in.exists():
             argv += ["-state", str(state_in)]
 
-        _run(argv)
+        result = _run(argv)
+        _LOGGER.debug(
+            "Fractal stdout: %s\nFractal stderr: %s",
+            _truncate(result.stdout), _truncate(result.stderr),
+        )
 
         bmp = out_path / "current.bmp"
         if not bmp.exists() or bmp.stat().st_size == 0:
-            return jsonify({"error": "fractal.x produced no output"}), 500
+            _LOGGER.error(
+                "Fractal: expected %s after '%s' (exit %d) but it is %s",
+                bmp, " ".join(str(a) for a in argv), result.returncode,
+                "missing" if not bmp.exists() else "empty (0 bytes)",
+            )
+            _log_dir(out_path, "Fractal")
+            _LOGGER.error(
+                "Fractal stdout: %s\nFractal stderr: %s",
+                _truncate(result.stdout), _truncate(result.stderr),
+            )
+            return jsonify({
+                "error": "fractal.x produced no output",
+                "detail": f"expected {bmp} (exit {result.returncode}); "
+                          f"see add-on log for stdout/stderr and directory listing",
+            }), 500
 
         data_bytes = bmp.read_bytes()
 
@@ -365,12 +492,17 @@ def generate_fractal():
 
         _last_source   = "generative"
         _last_art_type = "fractal"
-        _LOGGER.info("Fractal: %d bytes", len(data_bytes))
+        _LOGGER.info("Fractal: %d bytes  zoom_step=%d", len(data_bytes), _fractal_zoom_step)
         return Response(data_bytes, mimetype="image/bmp")
 
     except RuntimeError as exc:
         _LOGGER.error("Fractal failed: %s", exc)
+        _log_dir(out_path, "Fractal")
         return jsonify({"error": str(exc)}), 500
+    except Exception as exc:
+        _LOGGER.error("Fractal unexpected error: %s", exc, exc_info=True)
+        _log_dir(out_path, "Fractal")
+        return jsonify({"error": f"Unexpected error: {exc}"}), 500
     finally:
         shutil.rmtree(out_dir, ignore_errors=True)
 
@@ -528,6 +660,7 @@ def scheduler_trigger():
 def push_to_device():
     image_data  = request.get_data()
     if not image_data:
+        _LOGGER.error("Push: no image data in request body")
         return jsonify({"error": "No image data"}), 400
 
     target_host = request.args.get("host") or PHOTOFRAME_HOST
@@ -540,8 +673,13 @@ def push_to_device():
         content_type = request.content_type or "image/jpeg"
 
     device_url = f"http://{target_host}/api/display-image"
-    _LOGGER.info("Pushing %d bytes (%s) to %s", len(image_data), content_type, device_url)
+    header_preview = image_data[:16].hex()
+    _LOGGER.info(
+        "Pushing %d bytes (%s, header=%s) to %s",
+        len(image_data), content_type, header_preview, device_url,
+    )
 
+    start = time.monotonic()
     try:
         resp = requests.post(
             device_url,
@@ -549,13 +687,41 @@ def push_to_device():
             headers={"Content-Type": content_type},
             timeout=60,
         )
+        elapsed = time.monotonic() - start
+
         if resp.status_code == 200:
+            _LOGGER.info("Push OK in %.2fs (%s)", elapsed, device_url)
             return jsonify({"status": "ok"})
-        return jsonify({"error": f"Device returned HTTP {resp.status_code}"}), 502
+
+        # Device rejected the image — log everything we know about why.
+        body_preview = _truncate(resp.text, 2000)
+        _LOGGER.error(
+            "Device %s returned HTTP %d in %.2fs for a %d-byte %s push\n"
+            "response headers: %s\nresponse body: %s",
+            device_url, resp.status_code, elapsed, len(image_data), content_type,
+            dict(resp.headers), body_preview,
+        )
+        return jsonify({
+            "error": f"Device returned HTTP {resp.status_code}",
+            "detail": body_preview,
+        }), 502
+
     except requests.exceptions.ConnectionError as exc:
+        _LOGGER.error("Push: cannot reach %s: %s", device_url, exc)
         return jsonify({"error": f"Cannot reach {target_host}: {exc}"}), 503
     except requests.exceptions.Timeout:
+        elapsed = time.monotonic() - start
+        _LOGGER.error(
+            "Push: timed out after %.2fs pushing %d bytes to %s",
+            elapsed, len(image_data), device_url,
+        )
         return jsonify({"error": "Device push timed out"}), 504
+    except Exception as exc:
+        _LOGGER.error(
+            "Push: unexpected error pushing %d bytes to %s: %s",
+            len(image_data), device_url, exc, exc_info=True,
+        )
+        return jsonify({"error": f"Unexpected push error: {exc}"}), 500
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -569,3 +735,4 @@ if __name__ == "__main__":
     _LOGGER.info("Web UI: http://localhost:%d/ui", PORT)
     _scheduler.start()
     app.run(host="0.0.0.0", port=PORT)
+  
