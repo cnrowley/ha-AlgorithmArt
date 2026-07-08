@@ -185,13 +185,12 @@ func render(
 //   - bottom-up rows
 //   - rows padded to 4-byte boundaries
 // ------------------------------------------------------------
-
 func writeBMPAtomic(path string, pixels []uint8, width, height int) error {
     tmp := path + ".tmp"
 
-    rowSize := (3*width + 3) &^ 3
-    imgSize := rowSize * height
-    fileSize := 14 + 40 + imgSize
+    rowBytes := (3*width + 3) &^ 3
+    dataSize := rowBytes * height
+    fileSize := 54 + dataSize
 
     f, err := os.Create(tmp)
     if err != nil {
@@ -203,117 +202,42 @@ func writeBMPAtomic(path string, pixels []uint8, width, height int) error {
         _ = os.Remove(tmp)
     }
 
-    // --------------------------------------------------------
-    // BMP file header, 14 bytes
-    // --------------------------------------------------------
+    header := make([]byte, 54)
 
-    if err := binary.Write(f, binary.LittleEndian, uint16(0x4D42)); err != nil {
+    header[0] = 'B'
+    header[1] = 'M'
+
+    binary.LittleEndian.PutUint32(header[2:], uint32(fileSize))
+    binary.LittleEndian.PutUint32(header[10:], 54)
+
+    // BITMAPINFOHEADER
+    binary.LittleEndian.PutUint32(header[14:], 40)
+    binary.LittleEndian.PutUint32(header[18:], uint32(width))
+    binary.LittleEndian.PutUint32(header[22:], uint32(height))
+    binary.LittleEndian.PutUint16(header[26:], 1)
+    binary.LittleEndian.PutUint16(header[28:], 24)
+    binary.LittleEndian.PutUint32(header[30:], 0)
+    binary.LittleEndian.PutUint32(header[34:], uint32(dataSize))
+
+    // Leave pixels-per-metre, colour count, and important colour count as zero,
+    // matching the known-working DLA writer.
+
+    if _, err := f.Write(header); err != nil {
         closeAndRemove()
         return err
     }
 
-    if err := binary.Write(f, binary.LittleEndian, uint32(fileSize)); err != nil {
-        closeAndRemove()
-        return err
-    }
+    row := make([]byte, rowBytes)
 
-    if err := binary.Write(f, binary.LittleEndian, uint16(0)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    if err := binary.Write(f, binary.LittleEndian, uint16(0)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    // Pixel data starts immediately after the 14-byte file header
-    // and 40-byte BITMAPINFOHEADER.
-    if err := binary.Write(f, binary.LittleEndian, uint32(14+40)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    // --------------------------------------------------------
-    // DIB header, BITMAPINFOHEADER, 40 bytes
-    // --------------------------------------------------------
-
-    if err := binary.Write(f, binary.LittleEndian, uint32(40)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    if err := binary.Write(f, binary.LittleEndian, int32(width)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    // Positive height means bottom-up BMP.
-    if err := binary.Write(f, binary.LittleEndian, int32(height)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    if err := binary.Write(f, binary.LittleEndian, uint16(1)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    // 24 bits per pixel.
-    if err := binary.Write(f, binary.LittleEndian, uint16(24)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    // BI_RGB, no compression.
-    if err := binary.Write(f, binary.LittleEndian, uint32(0)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    if err := binary.Write(f, binary.LittleEndian, uint32(imgSize)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    // Pixels per metre. 2835 is approximately 72 DPI.
-    if err := binary.Write(f, binary.LittleEndian, int32(2835)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    if err := binary.Write(f, binary.LittleEndian, int32(2835)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    // No palette.
-    if err := binary.Write(f, binary.LittleEndian, uint32(0)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    if err := binary.Write(f, binary.LittleEndian, uint32(0)); err != nil {
-        closeAndRemove()
-        return err
-    }
-
-    // --------------------------------------------------------
-    // Pixel data
-    // --------------------------------------------------------
-
-    row := make([]byte, rowSize)
-
-    // Bottom-up: write last image row first.
     for y := height - 1; y >= 0; y-- {
         i := 0
 
         for x := 0; x < width; x++ {
-            paletteIndex := pixels[y*width+x]
+            idx := pixels[y*width+x]
 
             var c BGRA
-            if int(paletteIndex) < len(acepPalette) {
-                c = acepPalette[paletteIndex]
+            if int(idx) < len(acepPalette) {
+                c = acepPalette[idx]
             } else {
                 c = acepPalette[BLACK]
             }
@@ -324,8 +248,7 @@ func writeBMPAtomic(path string, pixels []uint8, width, height int) error {
             i += 3
         }
 
-        // Pad row to 4-byte boundary.
-        for ; i < rowSize; i++ {
+        for ; i < rowBytes; i++ {
             row[i] = 0
         }
 
@@ -342,7 +265,6 @@ func writeBMPAtomic(path string, pixels []uint8, width, height int) error {
 
     return os.Rename(tmp, path)
 }
-
 // ------------------------------------------------------------
 // Main
 // ------------------------------------------------------------
