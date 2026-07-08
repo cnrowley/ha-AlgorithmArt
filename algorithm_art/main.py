@@ -354,7 +354,7 @@ def generate_fractal():
 
         bmp = out_path / "current.bmp"
         if not bmp.exists() or bmp.stat().st_size == 0:
-            return jsonify({"error": "fractalgen.x produced no output"}), 500
+            return jsonify({"error": "fractal.x produced no output"}), 500
 
         data_bytes = bmp.read_bytes()
 
