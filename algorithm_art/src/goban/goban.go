@@ -481,59 +481,78 @@ func render(
 
 ////////////////////////////////////////////////////////////////////////////////
 // CAPTURE GRIDS
-
 func drawCaptureGrids(
     img *image.RGBA,
     b Board,
     offsetX, offsetY, boardPx, r int,
     whiteCol, blackCol color.RGBA,
 ) {
-    spacing := r*2 + 4
+    stoneDiameter := 2 * r
+    spacing := stoneDiameter + 4
 
-    if spacing <= 0 {
-        diag("WARNING: invalid capture-grid spacing=%d", spacing)
-        return
+    // ---------- LEFT AREA ----------
+    leftWidth := offsetX - r - 2
+    if leftWidth > spacing {
+        cols := leftWidth / spacing
+        rows := boardPx / spacing
+
+        capacity := cols * rows
+        count := b.CapturedWhite
+        if count > capacity {
+            count = capacity
+        }
+
+        for i := 0; i < count; i++ {
+            col := i / rows
+            row := i % rows
+
+            x := offsetX - r - col*spacing
+            y := offsetY + r + row*spacing
+
+            circle(img, x, y, r, whiteCol)
+            circleOutline(img, x, y, r, palette["black"])
+        }
+
+        diag(
+            "Captured white: %d shown of %d (capacity=%d)",
+            count,
+            b.CapturedWhite,
+            capacity,
+        )
     }
 
-    perCol := boardPx / spacing
-    if perCol < 1 {
-        perCol = 1
-    }
+    // ---------- RIGHT AREA ----------
+    rightStart := offsetX + boardPx
+    rightWidth := imgW - rightStart - r - 2
 
-    leftX := offsetX - spacing
-    rightX := offsetX + boardPx + spacing
-    topY := offsetY
+    if rightWidth > spacing {
+        cols := rightWidth / spacing
+        rows := boardPx / spacing
 
-    diag("Capture grid:")
-    diag("  spacing=%d", spacing)
-    diag("  perCol=%d", perCol)
-    diag("  leftX=%d rightX=%d topY=%d", leftX, rightX, topY)
-    diag("  captured white=%d, captured black=%d", b.CapturedWhite, b.CapturedBlack)
+        capacity := cols * rows
+        count := b.CapturedBlack
+        if count > capacity {
+            count = capacity
+        }
 
-    // LEFT SIDE:
-    // Captured white stones are displayed one by one in a vertical grid.
-    for i := 0; i < b.CapturedWhite; i++ {
-        x := leftX - (i/perCol)*spacing
-        y := topY + (i%perCol)*spacing
+        for i := 0; i < count; i++ {
+            col := i / rows
+            row := i % rows
 
-        diag("  captured white stone %d at pixel(%d,%d)", i+1, x, y)
+            x := rightStart + r + col*spacing
+            y := offsetY + r + row*spacing
 
-        circle(img, x, y, r/2, whiteCol)
-        circleOutline(img, x, y, r/2, palette["black"])
-    }
+            circle(img, x, y, r, blackCol)
+        }
 
-    // RIGHT SIDE:
-    // Captured black stones are displayed one by one in a vertical grid.
-    for i := 0; i < b.CapturedBlack; i++ {
-        x := rightX + (i/perCol)*spacing
-        y := topY + (i%perCol)*spacing
-
-        diag("  captured black stone %d at pixel(%d,%d)", i+1, x, y)
-
-        circle(img, x, y, r/2, blackCol)
+        diag(
+            "Captured black: %d shown of %d (capacity=%d)",
+            count,
+            b.CapturedBlack,
+            capacity,
+        )
     }
 }
-
 ////////////////////////////////////////////////////////////////////////////////
 // DRAW
 
