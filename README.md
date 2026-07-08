@@ -1,4 +1,4 @@
-# PhotopainterArt
+# AlgorithmArt
 
 Home Assistant integration and companion add-on for driving a 7-color ACeP
 e-paper "PhotoPainter" frame — with built-in generative art (diffusion-limited
