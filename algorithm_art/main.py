@@ -325,6 +325,7 @@ _scheduler = Scheduler(generate_fn=_scheduler_generate)
 def health():
     return jsonify({
         "status": "ok",
+        "build": BUILD_MARKER,
         "generators": {
             "dla":     _available(DLA_CMD),
             "fractal": _available(FRACTAL_CMD),
@@ -814,9 +815,15 @@ def push_to_device():
         return jsonify({"error": f"Unexpected push error: {exc}"}), 500
 
 
+# Bump this whenever a diagnostic/behavioral change is made, so the running
+# container's log makes it obvious which build is actually deployed instead
+# of having to infer it from which log lines are (or aren't) present.
+BUILD_MARKER = "2026-07-08.3-bmp-diagnostics+dla-persist+push-diagnostics"
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    _LOGGER.info("AlgorithmArt build: %s", BUILD_MARKER)
     _LOGGER.info(
         "AlgorithmArt starting on :%d  (dla=%s  fractal=%s  goban=%s  device=%s)",
         PORT, DLA_CMD, FRACTAL_CMD, GOBAN_CMD, PHOTOFRAME_HOST,
@@ -825,5 +832,3 @@ if __name__ == "__main__":
     _LOGGER.info("Web UI: http://localhost:%d/ui", PORT)
     _scheduler.start()
     app.run(host="0.0.0.0", port=PORT)
-
-  

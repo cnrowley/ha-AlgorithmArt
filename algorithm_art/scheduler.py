@@ -87,10 +87,21 @@ class Scheduler:
             return dict(self._state)
 
     def update(self, updates: dict[str, Any]) -> None:
-        """Apply a partial state update and restart the timer if needed."""
+        """Apply a partial state update and restart the timer only if the
+        enabled flag or interval actually changed value.
+
+        The web UI resaves the full settings payload on every user edit
+        (colors, board style, etc.) — those always include "enabled" and
+        "interval_seconds" even when unchanged, so we compare values here
+        rather than just checking key presence. Restarting on every save
+        would reset next_fire and make the countdown never progress.
+        """
         with self._lock:
             restart = False
-            if "enabled" in updates or "interval_seconds" in updates:
+            if "enabled" in updates and updates["enabled"] != self._state.get("enabled"):
+                restart = True
+            if ("interval_seconds" in updates
+                    and updates["interval_seconds"] != self._state.get("interval_seconds")):
                 restart = True
             self._state.update(updates)
             self._save_state_locked()

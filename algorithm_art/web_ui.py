@@ -594,7 +594,7 @@ async function poll(){
     setSwatchSel('fg-sw','frac-fg', sch.fractal_fg||'white');
     setSwatchSel('bg-sw','frac-bg', sch.fractal_bg||'black');
     document.getElementById('frac-mode').value=sch.fractal_mode||'single';
-    fracSave();
+    updateFracVisibility();
     document.getElementById('goban-bg').value=sch.goban_bg||'white';
     document.getElementById('goban-board').value=sch.goban_board||'yellow';
     document.getElementById('goban-white').value=sch.goban_white_color||'green';
@@ -696,10 +696,14 @@ function setSwatchSel(cid, hid, val){
   });
 }
 
-function fracSave(){
+function updateFracVisibility(){
   const isZoom=document.getElementById('frac-mode').value==='zoom_sequence';
   document.getElementById('zoom-info').style.display=isZoom?'block':'none';
   document.getElementById('frac-reset-btn').style.display=isZoom?'':'none';
+}
+
+function fracSave(){
+  updateFracVisibility();
   schedSave();
 }
 
