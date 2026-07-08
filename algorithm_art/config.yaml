@@ -1,5 +1,5 @@
 name: "AlgorithmArt Generator"
-description: "Runs DLA, Fractal (fractalgen), and Goban art generators for the PhotopainterArt integration."
+description: "Runs DLA, Fractal, and Goban art generators for the PhotopainterArt integration."
 version: "1.0.0"
 slug: "algorithm_art"
 init: false
