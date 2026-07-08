@@ -24,8 +24,8 @@ options:
   dla_cmd: "dla.x"
   fractal_cmd: "fractal.x"
   goban_cmd: "goban.x"
-  display_width: 600
-  display_height: 448
+  display_width: 800
+  display_height: 480
 
 schema:
   port: int
