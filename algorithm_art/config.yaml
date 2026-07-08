@@ -22,7 +22,7 @@ options:
   port: 8765
   photoframe_host: "photoframe.local"
   dla_cmd: "dla.x"
-  fractal_cmd: "fractalgen.x"
+  fractal_cmd: "fractal.x"
   goban_cmd: "goban.x"
   display_width: 600
   display_height: 448
