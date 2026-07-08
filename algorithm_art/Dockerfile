@@ -36,7 +36,7 @@ COPY --from=builder /out/goban.x      /usr/local/bin/goban.x
 
 RUN chmod +x \
     /usr/local/bin/dla.x \
-    /usr/local/bin/fractalgen.x \
+    /usr/local/bin/fractal.x \
     /usr/local/bin/goban.x
 
 # Flask app and supporting modules
