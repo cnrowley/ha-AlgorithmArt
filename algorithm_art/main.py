@@ -44,6 +44,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -177,6 +178,93 @@ def _log_dir(path, label: str) -> None:
         except OSError as exc:
             lines.append(f"  {e.name}  <stat failed: {exc}>")
     _LOGGER.info("%s: contents of %s:\n%s", label, p, "\n".join(lines))
+
+
+def _bmp_info(data: bytes) -> dict | None:
+    """Parse a BMP file header + DIB header for diagnostics.
+
+    Returns None if `data` doesn't look like a BMP at all. Any field that
+    can't be parsed (truncated file, unusual DIB header) is reported as
+    None rather than raising, since this is purely diagnostic.
+    """
+    if len(data) < 54 or data[:2] != b"BM":
+        return None
+    try:
+        file_size_hdr, data_offset = struct.unpack_from("<I4xI", data, 2)
+        dib_size = struct.unpack_from("<I", data, 14)[0]
+        info = {
+            "file_size_declared": file_size_hdr,
+            "file_size_actual":   len(data),
+            "data_offset":        data_offset,
+            "dib_header_size":    dib_size,
+        }
+        if dib_size >= 40 and len(data) >= 54:
+            width, height, planes, bpp, compression, image_size = \
+                struct.unpack_from("<iiHHII", data, 18)
+            palette_bytes = data_offset - (14 + dib_size)
+            info.update({
+                "width":        width,
+                "height":       height,
+                "planes":       planes,
+                "bpp":          bpp,
+                "compression":  compression,
+                "image_size_declared": image_size,
+                "palette_bytes": palette_bytes if palette_bytes >= 0 else None,
+                "palette_colors": (palette_bytes // 4) if palette_bytes and palette_bytes > 0 else 0,
+            })
+        return info
+    except struct.error as exc:
+        _LOGGER.warning("Could not parse BMP header: %s", exc)
+        return None
+
+
+def _log_bmp_info(data: bytes, label: str, expect_w: int | None = None,
+                   expect_h: int | None = None) -> None:
+    info = _bmp_info(data)
+    if info is None:
+        _LOGGER.warning("%s: not a parseable BMP (header=%s)", label, data[:16].hex())
+        return
+
+    _LOGGER.info(
+        "%s: BMP %sx%s  %dbpp  compression=%d  palette_colors=%d  "
+        "data_offset=%d  dib_header=%d  declared_size=%d  actual_size=%d",
+        label, info.get("width"), info.get("height"), info.get("bpp", -1),
+        info.get("compression", -1), info.get("palette_colors", 0),
+        info["data_offset"], info["dib_header_size"],
+        info["file_size_declared"], info["file_size_actual"],
+    )
+
+    if info["file_size_declared"] != info["file_size_actual"]:
+        _LOGGER.warning(
+            "%s: BMP header declares %d bytes but %d were actually sent — "
+            "file may be truncated/corrupt",
+            label, info["file_size_declared"], info["file_size_actual"],
+        )
+    if info.get("compression") not in (0, None):
+        _LOGGER.warning(
+            "%s: BMP uses compression=%d (non-zero) — many embedded/e-paper "
+            "BMP decoders only support uncompressed (BI_RGB=0)",
+            label, info["compression"],
+        )
+    if expect_w and expect_h and info.get("width") and info.get("height"):
+        actual_h = abs(info["height"])
+        if info["width"] != expect_w or actual_h != expect_h:
+            _LOGGER.warning(
+                "%s: BMP is %dx%d but display is configured for %dx%d — "
+                "size mismatch can cause the device to reject the image",
+                label, info["width"], actual_h, expect_w, expect_h,
+            )
+    if info.get("bpp") not in (None, 1, 4, 8, 24, 32):
+        _LOGGER.warning(
+            "%s: unusual bit depth %dbpp", label, info["bpp"],
+        )
+    if info.get("bpp") in (1, 4, 8) and info.get("palette_colors"):
+        _LOGGER.info(
+            "%s: BMP is %d-bit paletted (%d colours) — if the device only "
+            "accepts 24-bit truecolor BMPs, this is a likely rejection cause; "
+            "compare against a working DLA/Goban push's bpp",
+            label, info["bpp"], info["palette_colors"],
+        )
 
 
 # ── Scheduler generate function ───────────────────────────────────────────────
@@ -678,6 +766,8 @@ def push_to_device():
         "Pushing %d bytes (%s, header=%s) to %s",
         len(image_data), content_type, header_preview, device_url,
     )
+    if content_type == "image/bmp":
+        _log_bmp_info(image_data, "Push", expect_w=DEFAULT_WIDTH, expect_h=DEFAULT_HEIGHT)
 
     start = time.monotonic()
     try:
@@ -735,4 +825,5 @@ if __name__ == "__main__":
     _LOGGER.info("Web UI: http://localhost:%d/ui", PORT)
     _scheduler.start()
     app.run(host="0.0.0.0", port=PORT)
+
   
