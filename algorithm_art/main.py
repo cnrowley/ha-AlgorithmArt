@@ -433,10 +433,14 @@ def generate_dla():
 
     try:
         if frame == 1:
-            # Starting a new sequence: wipe any leftover state and re-init.
+            # Starting a new sequence: wipe any leftover state and re-init
+            # with a fresh random seed so each cycle's starting cluster
+            # layout differs.
             shutil.rmtree(DLA_WORK_DIR, ignore_errors=True)
             DLA_WORK_DIR.mkdir(parents=True, exist_ok=True)
-            init_result = _run([DLA_CMD, str(DLA_WORK_DIR), "--init"])
+            seed = random.getrandbits(63)
+            _LOGGER.info("DLA: starting new sequence (seed=%d)", seed)
+            init_result = _run([DLA_CMD, str(DLA_WORK_DIR), "--init", "--seed", str(seed)])
             _LOGGER.debug(
                 "DLA --init stdout: %s\nDLA --init stderr: %s",
                 _truncate(init_result.stdout), _truncate(init_result.stderr),
@@ -444,12 +448,13 @@ def generate_dla():
 
         if not DLA_WORK_DIR.exists():
             # Defensive: frame > 1 requested but no sequence in progress.
+            seed = random.getrandbits(63)
             _LOGGER.warning(
-                "DLA: frame=%d requested but %s is missing — re-initialising",
-                frame, DLA_WORK_DIR,
+                "DLA: frame=%d requested but %s is missing — re-initialising (seed=%d)",
+                frame, DLA_WORK_DIR, seed,
             )
             DLA_WORK_DIR.mkdir(parents=True, exist_ok=True)
-            _run([DLA_CMD, str(DLA_WORK_DIR), "--init"])
+            _run([DLA_CMD, str(DLA_WORK_DIR), "--init", "--seed", str(seed)])
 
         to_result = _run([DLA_CMD, str(DLA_WORK_DIR), "--to", str(frame)])
         _LOGGER.debug(
@@ -888,3 +893,4 @@ if __name__ == "__main__":
     _LOGGER.info("Web UI: http://localhost:%d/ui", PORT)
     _scheduler.start()
     app.run(host="0.0.0.0", port=PORT)
+
