@@ -1,8 +1,17 @@
 package main
 
 import (
+    "encoding/json"
+    "flag"
+    "fmt"
     "image"
     "image/color"
+    "math"
+    "math/rand"
+    "os"
+    "path/filepath"
+    "time"
+
     "golang.org/x/image/bmp"
 )
 
