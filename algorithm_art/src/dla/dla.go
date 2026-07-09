@@ -230,11 +230,22 @@ func (L *Layer) spawnPoint() (int, int) {
 // updateRadius grows the tracked cluster radius if (x, y) is farther from
 // center than anything stuck so far.
 func (L *Layer) updateRadius(x, y int) {
-	dx := float64(x - L.CenterX)
-	dy := float64(y - L.CenterY)
+	// Find the shortest path along the X axis (allowing for screen wrap)
+	dx := math.Abs(float64(x - L.centerX))
+	if dx > float64(W)/2.0 {
+		dx = float64(W) - dx
+	}
+
+	// Find the shortest path along the Y axis
+	dy := math.Abs(float64(y - L.centerY))
+	if dy > float64(H)/2.0 {
+		dy = float64(H) - dy
+	}
+
+	// Calculate true periodic distance
 	d := math.Hypot(dx, dy)
-	if d > L.Radius {
-		L.Radius = d
+	if d > L.radius {
+		L.radius = d
 	}
 }
 
