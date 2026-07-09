@@ -10,7 +10,10 @@ POST /generate/dla                { "frame": N }
 POST /generate/dla/reset          {}
 
 ── Fractal ────────────────────────────────────────────────────────────────────
-POST /generate/fractal            { "fg", "bg", "single", "frames", "has_state" }
+POST /generate/fractal            { "fg", "bg", "single", "frames", "has_state", "seed" }
+                                   seed is optional — a fresh random one is generated
+                                   per call if omitted, so repeated single-frame renders
+                                   don't always produce the same image.
 POST /fractal/reset               {}
 
 ── Goban ──────────────────────────────────────────────────────────────────────
@@ -43,6 +46,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import shutil
 import struct
 import subprocess
@@ -98,12 +102,17 @@ def _available(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
-def _run(argv: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
+def _run(argv: list[str], timeout: int = 120,
+         allowed_exit_codes: tuple[int, ...] = (0,)) -> subprocess.CompletedProcess:
     """Run a generator binary and return the CompletedProcess.
 
     Always logs the command, exit code, elapsed time, and stdout/stderr
     (truncated) so that "ran fine but produced nothing useful" failures are
     diagnosable from the add-on log, not just "command failed" ones.
+
+    `allowed_exit_codes` lets a caller treat a specific non-zero exit as an
+    expected outcome rather than a failure — e.g. fractal.x exits 10 when
+    the zoom sequence is intentionally exhausted, which isn't an error.
     """
     argv_str = [str(a) for a in argv]
     cmd_repr = " ".join(argv_str)
@@ -132,7 +141,7 @@ def _run(argv: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
         elapsed, result.returncode, cmd_repr, _truncate(stdout), _truncate(stderr),
     )
 
-    if result.returncode != 0:
+    if result.returncode not in allowed_exit_codes:
         _LOGGER.error(
             "Command failed (exit %d, %.2fs): %s\nstdout: %s\nstderr: %s",
             result.returncode, elapsed, cmd_repr, _truncate(stdout), _truncate(stderr),
@@ -516,6 +525,16 @@ def generate_fractal():
     frames    = int(data.get("frames",     1))
     has_state = bool(data.get("has_state", False))
 
+    # A fresh random seed every call so a new sequence doesn't always start
+    # from the same hardcoded point (fractal.x only actually uses this when
+    # there's no existing --state to resume from — see fractal.go). Callers
+    # can pass an explicit "seed" to reproduce a specific starting point.
+    seed = data.get("seed")
+    if seed is None:
+        seed = random.getrandbits(63)
+    else:
+        seed = int(seed)
+
     out_dir  = tempfile.mkdtemp(prefix="fractal_")
     out_path = Path(out_dir)
     state_in = out_path / "state.json"
@@ -530,8 +549,10 @@ def generate_fractal():
         elif has_state:
             _LOGGER.info(
                 "Fractal: zoom_sequence requested but no prior state at %s — "
-                "starting a fresh zoom", FRACTAL_STATE_FILE,
+                "starting a fresh zoom (seed=%d)", FRACTAL_STATE_FILE, seed,
             )
+        else:
+            _LOGGER.info("Fractal: single-frame render (seed=%d)", seed)
 
         argv = [
             FRACTAL_CMD,
@@ -540,19 +561,54 @@ def generate_fractal():
             "-out",    str(out_dir),
             "-fg",     fg,
             "-bg",     bg,
+            "-seed",   str(seed),
         ]
         if single:
             argv.append("-single")
         else:
             argv += ["-frames", str(max(1, frames))]
-        if has_state and state_in.exists():
+        if has_state:
+            # Always give fractal.x a --state path when in zoom_sequence
+            # mode, even on the very first call of a new sequence when
+            # nothing exists there yet — that's how it knows to *create*
+            # and persist state.json in the first place. Gating this on
+            # state_in.exists() would mean it's never told to save,
+            # so the sequence could never bootstrap itself.
             argv += ["-state", str(state_in)]
 
-        result = _run(argv)
-        _LOGGER.debug(
-            "Fractal stdout: %s\nFractal stderr: %s",
-            _truncate(result.stdout), _truncate(result.stderr),
-        )
+        exhausted_retry_used = False
+        while True:
+            result = _run(argv, allowed_exit_codes=(0, 10))
+            _LOGGER.debug(
+                "Fractal stdout: %s\nFractal stderr: %s",
+                _truncate(result.stdout), _truncate(result.stderr),
+            )
+
+            if result.returncode == 10:
+                # fractal.x's own "structure exhausted / max zoom reached"
+                # signal — an expected end to a zoom sequence, not an
+                # error. Reset state and immediately start a fresh one so
+                # the scheduler keeps cycling seamlessly instead of seeing
+                # a failed push.
+                if exhausted_retry_used:
+                    # A *brand new* random start point also exhausted
+                    # immediately — that's unexpected, don't loop forever.
+                    raise RuntimeError(
+                        "fractal.x reported the zoom exhausted even on a "
+                        "freshly-reset start point (exit 10 twice in a row)"
+                    )
+                _LOGGER.info(
+                    "Fractal: zoom sequence exhausted — resetting and "
+                    "starting a new one"
+                )
+                FRACTAL_STATE_FILE.unlink(missing_ok=True)
+                state_in.unlink(missing_ok=True)
+                seed = random.getrandbits(63)
+                argv[argv.index("-seed") + 1] = str(seed)
+                exhausted_retry_used = True
+                continue
+
+            break
 
         bmp = out_path / "current.bmp"
         if not bmp.exists() or bmp.stat().st_size == 0:
@@ -581,7 +637,7 @@ def generate_fractal():
 
         _last_source   = "generative"
         _last_art_type = "fractal"
-        _LOGGER.info("Fractal: %d bytes  zoom_step=%d", len(data_bytes), _fractal_zoom_step)
+        _LOGGER.info("Fractal: %d bytes  zoom_step=%d  seed=%d", len(data_bytes), _fractal_zoom_step, seed)
         return Response(data_bytes, mimetype="image/bmp")
 
     except RuntimeError as exc:
@@ -832,3 +888,4 @@ if __name__ == "__main__":
     _LOGGER.info("Web UI: http://localhost:%d/ui", PORT)
     _scheduler.start()
     app.run(host="0.0.0.0", port=PORT)
+  
