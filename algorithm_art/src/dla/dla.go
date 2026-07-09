@@ -4,12 +4,16 @@ import (
     "encoding/binary"
     "encoding/json"
     "fmt"
+    "image"
+    "image/color"
     "io"
     "math"
     "os"
     "path/filepath"
     "strconv"
     "time"
+
+    "golang.org/x/image/bmp"
 )
 
 // ============================================================
@@ -36,108 +40,35 @@ const (
 )
 
 // ============================================================
-// Colour + BMP
+// Colour
 // ============================================================
 
 type Color uint8
 
 const (
     WHITE Color = iota
-    YELLOW
-    GREEN
     BLUE
+    GREEN
     RED
-    BLACK
+    ORANGE
+    PURPLE
 )
 
-func colorName(c Color) string {
+func toRGBA(c Color) color.RGBA {
     switch c {
-    case YELLOW:
-        return "YELLOW"
-    case GREEN:
-        return "GREEN"
     case BLUE:
-        return "BLUE"
-    case RED:
-        return "RED"
-    case BLACK:
-        return "BLACK"
-    default:
-        return "WHITE"
-    }
-}
-
-type RGB struct {
-    r, g, b uint8
-}
-
-func toRGB(c Color) RGB {
-    switch c {
-    case YELLOW:
-        return RGB{230, 190, 0}
+        return color.RGBA{0, 0, 255, 255}
     case GREEN:
-        return RGB{0, 170, 0}
-    case BLUE:
-        return RGB{0, 110, 255}
+        return color.RGBA{0, 200, 0, 255}
     case RED:
-        return RGB{220, 0, 0}
-    case BLACK:
-        return RGB{0, 0, 0}
+        return color.RGBA{220, 0, 0, 255}
+    case ORANGE:
+        return color.RGBA{255, 140, 0, 255}
+    case PURPLE:
+        return color.RGBA{150, 0, 220, 255}
     default:
-        return RGB{255, 255, 255}
+        return color.RGBA{255, 255, 255, 255}
     }
-}
-
-func writeBMP24(path string, pix []Color) error {
-    rowBytes := (3*W + 3) &^ 3
-    dataSize := rowBytes * H
-    fileSize := 54 + dataSize
-
-    f, err := os.Create(path)
-    if err != nil {
-        return err
-    }
-    defer f.Close()
-
-    header := make([]byte, 54)
-    header[0] = 'B'
-    header[1] = 'M'
-    binary.LittleEndian.PutUint32(header[2:], uint32(fileSize))
-    binary.LittleEndian.PutUint32(header[10:], 54)
-    binary.LittleEndian.PutUint32(header[14:], 40)
-    binary.LittleEndian.PutUint32(header[18:], uint32(W))
-    binary.LittleEndian.PutUint32(header[22:], uint32(H))
-    binary.LittleEndian.PutUint16(header[26:], 1)
-    binary.LittleEndian.PutUint16(header[28:], 24)
-    binary.LittleEndian.PutUint32(header[34:], uint32(dataSize))
-
-    if _, err := f.Write(header); err != nil {
-        return err
-    }
-
-    row := make([]byte, rowBytes)
-
-    for y := H - 1; y >= 0; y-- {
-        i := 0
-
-        for x := 0; x < W; x++ {
-            c := toRGB(pix[idxOf(x, y)])
-            row[i+0] = c.b
-            row[i+1] = c.g
-            row[i+2] = c.r
-            i += 3
-        }
-
-        for ; i < rowBytes; i++ {
-            row[i] = 0
-        }
-
-        if _, err := f.Write(row); err != nil {
-            return err
-        }
-    }
-
-    return nil
 }
 
 // ============================================================
@@ -225,7 +156,6 @@ func (r *RNG) JitterQuarter() float64 {
 }
 
 // SplitMix64-style seed scrambling.
-// This gives well-separated layer seeds even if the base seed is simple.
 func splitSeed(x uint64) uint64 {
     x += 0x9e3779b97f4a7c15
     x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
@@ -305,21 +235,7 @@ func (L *Layer) hasOccupiedNeighbour(x, y int) bool {
     return false
 }
 
-// ------------------------------------------------------------
-// Walker outcomes, for diagnostics.
-// ------------------------------------------------------------
-
-type walkerOutcome int
-
-const (
-    outcomeStuck walkerOutcome = iota
-    outcomeKilled
-    outcomeTimeout
-)
-
-// addWalker now reports how the walk ended (stuck / killed / timed out)
-// and how many steps it took, so callers can aggregate diagnostics.
-func (L *Layer) addWalker() (walkerOutcome, int) {
+func (L *Layer) addWalker() bool {
     x, y := L.spawnPoint()
 
     for s := 0; s < MaxSteps; s++ {
@@ -334,17 +250,17 @@ func (L *Layer) addWalker() (walkerOutcome, int) {
         y = wrap(y+dy, H)
 
         if L.shouldKill(x, y) {
-            return outcomeKilled, s + 1
+            return false
         }
 
         if L.hasOccupiedNeighbour(x, y) {
             L.Occ[idxOf(x, y)] = 1
             L.updateRadius(x, y)
-            return outcomeStuck, s + 1
+            return true
         }
     }
 
-    return outcomeTimeout, MaxSteps
+    return false
 }
 
 // ============================================================
@@ -382,15 +298,14 @@ func thicken(src []byte, out []byte) {
 func initializeLayers(seed uint64) []Layer {
     base := newRNG(splitSeed(seed))
 
-    // Draw order is light to dark.
-    // Later colours overwrite earlier colours in the final stacked BMP,
-    // so dark high-contrast colours are placed later.
+    // Draw order. These are all saturated colours and avoid pure black,
+    // which can dominate on limited or thresholding display pipelines.
     palette := []Color{
-        YELLOW,
-        GREEN,
         BLUE,
+        GREEN,
         RED,
-        BLACK,
+        ORANGE,
+        PURPLE,
     }
 
     layers := make([]Layer, 0, NumLayers)
@@ -571,30 +486,49 @@ func loadCheckpoint(dir string, frame *int, layers *[]Layer) (bool, error) {
 }
 
 // ============================================================
-// Rendering
+// Rendering using golang.org/x/image/bmp
 // ============================================================
 
 func renderComposite(outDir string, layers []Layer) error {
-    img := make([]Color, W*H)
-    for i := range img {
-        img[i] = WHITE
+    img := image.NewRGBA(image.Rect(0, 0, W, H))
+
+    white := toRGBA(WHITE)
+
+    for y := 0; y < H; y++ {
+        for x := 0; x < W; x++ {
+            img.SetRGBA(x, y, white)
+        }
     }
 
     thick := make([]byte, W*H)
 
-    // Stack layers in palette order.
-    // Later layers overwrite earlier layers where visual thickening overlaps.
+    // Stacked composite. Later layers overwrite earlier layers only
+    // where their thickened pixels overlap.
     for i := range layers {
         thicken(layers[i].Occ, thick)
 
-        for p := 0; p < W*H; p++ {
-            if thick[p] != 0 {
-                img[p] = layers[i].Color
+        col := toRGBA(layers[i].Color)
+
+        for y := 0; y < H; y++ {
+            for x := 0; x < W; x++ {
+                p := idxOf(x, y)
+
+                if thick[p] != 0 {
+                    img.SetRGBA(x, y, col)
+                }
             }
         }
     }
 
-    return writeBMP24(filepath.Join(outDir, "current.bmp"), img)
+    outPath := filepath.Join(outDir, "current.bmp")
+
+    f, err := os.Create(outPath)
+    if err != nil {
+        return err
+    }
+    defer f.Close()
+
+    return bmp.Encode(f, img)
 }
 
 // ============================================================
@@ -603,8 +537,8 @@ func renderComposite(outDir string, layers []Layer) error {
 
 func usage() {
     fmt.Fprintln(os.Stderr, "Usage:")
-    fmt.Fprintln(os.Stderr, "  ./dla out --init [--seed S]")
-    fmt.Fprintln(os.Stderr, "  ./dla out --to N [--seed S]")
+    fmt.Fprintln(os.Stderr, "  ./dla.x out --init [--seed S]")
+    fmt.Fprintln(os.Stderr, "  ./dla.x out --to N [--seed S]")
 }
 
 // ============================================================
@@ -699,9 +633,8 @@ func main() {
 
         for i := range layers {
             fmt.Printf(
-                "Layer %d [%s]: start=(%d,%d), seed=%d\n",
+                "Layer %d: start=(%d,%d), seed=%d\n",
                 i,
-                colorName(layers[i].Color),
                 layers[i].CenterX,
                 layers[i].CenterY,
                 layers[i].RNG.State,
@@ -738,9 +671,8 @@ func main() {
 
         for i := range layers {
             fmt.Printf(
-                "Layer %d [%s]: start=(%d,%d), seed=%d\n",
+                "Layer %d: start=(%d,%d), seed=%d\n",
                 i,
-                colorName(layers[i].Color),
                 layers[i].CenterX,
                 layers[i].CenterY,
                 layers[i].RNG.State,
@@ -764,44 +696,27 @@ func main() {
     }
 
     for f := curFrame + 1; f <= targetFrame; f++ {
-        fmt.Printf("Frame %d:\n", f)
+        fmt.Printf("Frame %d:", f)
 
         for li := range layers {
-            stuck, killed, timeout := 0, 0, 0
-            stepSumStuck := 0
+            stuck := 0
 
             for p := 0; p < WalkersPerFrame; p++ {
-                outcome, steps := layers[li].addWalker()
-
-                switch outcome {
-                case outcomeStuck:
+                if layers[li].addWalker() {
                     stuck++
-                    stepSumStuck += steps
-                case outcomeKilled:
-                    killed++
-                case outcomeTimeout:
-                    timeout++
                 }
             }
 
-            avgSteps := 0.0
-            if stuck > 0 {
-                avgSteps = float64(stepSumStuck) / float64(stuck)
-            }
-
             fmt.Printf(
-                "  L%d [%-6s] stuck=%4d killed=%4d timeout=%4d (%.1f%%) avgSteps=%.1f mass=%d r=%.1f\n",
+                " L%d stuck=%d total=%d r=%.1f",
                 li,
-                colorName(layers[li].Color),
                 stuck,
-                killed,
-                timeout,
-                100.0*float64(timeout)/float64(WalkersPerFrame),
-                avgSteps,
                 countOcc(layers[li].Occ),
                 layers[li].Radius,
             )
         }
+
+        fmt.Println()
 
         if err := saveCheckpoint(outDir, f, layers); err != nil {
             fmt.Fprintln(os.Stderr, "Failed to save checkpoint:", err)
