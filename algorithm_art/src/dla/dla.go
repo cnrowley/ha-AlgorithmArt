@@ -1,768 +1,909 @@
 package main
 
 import (
-    "encoding/binary"
-    "encoding/json"
-    "fmt"
-    "io"
-    "math"
-    "os"
-    "path/filepath"
-    "strconv"
-    "time"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"os"
+	"path/filepath"
+	"strconv"
 )
 
+//
 // ============================================================
-// Configuration
+// Configuration (match C++ defaults)
 // ============================================================
-
+//
 const (
-    W         = 800
-    H         = 480
-    NumLayers = 5
+	W = 800
+	H = 480
 
-    WalkersPerFrame = 1200
-    MaxSteps        = 6000
+	// Growth (thin & clean)
+	WALKERS_PER_FRAME = 84
+	MAX_STEPS         = 6000
 
-    // Visual thickening only; does not affect growth.
-    ThickRad = 3
+	// Post-process thickening (fractional avoids "+" artifacts)
+	THICK_R = 1.1
 
-    // Walkers are launched this far outside the current cluster radius.
-    SpawnMargin = 30.0
-
-    // If a walker wanders too far away from its own layer cluster,
-    // abandon it. This keeps walks local and avoids wasting steps.
-    KillMargin = 120.0
+	// SpawnMargin is how far outside a layer's current cluster radius new
+	// walkers are launched, in pixels.
+	//
+	// Previously walkers spawned uniformly across the entire 800x480
+	// canvas regardless of how small the cluster still was. A random walk
+	// needs roughly distance^2 steps for a real chance of reaching a
+	// target, so with MAX_STEPS=6000 almost nothing beyond ~100px away
+	// ever actually sticks — most of each frame's walker budget was
+	// wasted on doomed attempts. Whichever layer(s) got lucky early sticks
+	// gained a slightly larger capture area, compounding over frames into
+	// a rich-get-richer effect where only a couple of layers visibly grow.
+	// Launching from a ring just outside the cluster's current radius
+	// keeps distance-to-target roughly constant regardless of cluster
+	// size, so every layer grows at a comparable, predictable rate.
+	SpawnMargin = 30.0
 )
 
-// ============================================================
-// Colour + BMP
-// ============================================================
+// IMPORTANT:
+// In Go, modulo/division by a *constant* zero is a compile-time error,
+// even if guarded by short-circuit (&& / ||). Therefore this must NOT
+// be a constant when set to 0.
+//
+// Set to 0 to disable intermediate checkpoints (only final checkpoint).
+var checkpointEvery = 0
 
+//
+// ============================================================
+// Color + BMP
+// ============================================================
+//
 type Color uint8
 
 const (
-    WHITE Color = iota
-    YELLOW
-    GREEN
-    BLUE
-    RED
-    BLACK
+	WHITE  Color = 0
+	BLACK  Color = 1
+	BLUE   Color = 2
+	GREEN  Color = 3
+	RED    Color = 4
+	YELLOW Color = 5
 )
 
-type RGB struct {
-    r, g, b uint8
-}
+type RGB struct{ r, g, b uint8 }
 
 func toRGB(c Color) RGB {
-    switch c {
-    case YELLOW:
-        return RGB{230, 190, 0}
-    case GREEN:
-        return RGB{0, 170, 0}
-    case BLUE:
-        return RGB{0, 110, 255}
-    case RED:
-        return RGB{220, 0, 0}
-    case BLACK:
-        return RGB{0, 0, 0}
-    default:
-        return RGB{255, 255, 255}
-    }
+	switch c {
+	case BLACK:
+		return RGB{0, 0, 0}
+	case BLUE:
+		return RGB{0, 0, 255}
+	case GREEN:
+		return RGB{0, 200, 0}
+	case RED:
+		return RGB{200, 0, 0}
+	case YELLOW:
+		return RGB{200, 200, 0}
+	default:
+		return RGB{255, 255, 255}
+	}
 }
 
 func writeBMP24(path string, pix []Color) error {
-    rowBytes := (3*W + 3) &^ 3
-    dataSize := rowBytes * H
-    fileSize := 54 + dataSize
+	rowBytes := (3*W + 3) & ^3 // align to 4 bytes
+	dataSize := rowBytes * H
+	fileSize := 54 + dataSize
 
-    f, err := os.Create(path)
-    if err != nil {
-        return err
-    }
-    defer f.Close()
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("cannot write BMP %s: %w", path, err)
+	}
+	defer f.Close()
 
-    header := make([]byte, 54)
-    header[0] = 'B'
-    header[1] = 'M'
-    binary.LittleEndian.PutUint32(header[2:], uint32(fileSize))
-    binary.LittleEndian.PutUint32(header[10:], 54)
-    binary.LittleEndian.PutUint32(header[14:], 40)
-    binary.LittleEndian.PutUint32(header[18:], uint32(W))
-    binary.LittleEndian.PutUint32(header[22:], uint32(H))
-    binary.LittleEndian.PutUint16(header[26:], 1)
-    binary.LittleEndian.PutUint16(header[28:], 24)
-    binary.LittleEndian.PutUint32(header[34:], uint32(dataSize))
+	// BMP header (54 bytes), little-endian fields
+	header := make([]byte, 54)
+	header[0] = 'B'
+	header[1] = 'M'
+	binary.LittleEndian.PutUint32(header[2:], uint32(fileSize))
+	binary.LittleEndian.PutUint32(header[10:], 54) // pixel data offset
+	binary.LittleEndian.PutUint32(header[14:], 40) // DIB header size
+	binary.LittleEndian.PutUint32(header[18:], uint32(W))
+	binary.LittleEndian.PutUint32(header[22:], uint32(H))
+	binary.LittleEndian.PutUint16(header[26:], 1)  // planes
+	binary.LittleEndian.PutUint16(header[28:], 24) // bpp
+	binary.LittleEndian.PutUint32(header[34:], uint32(dataSize))
 
-    if _, err := f.Write(header); err != nil {
-        return err
-    }
+	if _, err := f.Write(header); err != nil {
+		return err
+	}
 
-    row := make([]byte, rowBytes)
+	row := make([]byte, rowBytes)
 
-    for y := H - 1; y >= 0; y-- {
-        i := 0
+	// Write bottom-up rows
+	for y := H - 1; y >= 0; y-- {
+		i := 0
+		base := y * W
+		for x := 0; x < W; x++ {
+			c := toRGB(pix[base+x])
+			row[i+0] = c.b
+			row[i+1] = c.g
+			row[i+2] = c.r
+			i += 3
+		}
+		// padding
+		for k := i; k < len(row); k++ {
+			row[k] = 0
+		}
+		if _, err := f.Write(row); err != nil {
+			return err
+		}
+	}
 
-        for x := 0; x < W; x++ {
-            c := toRGB(pix[idxOf(x, y)])
-            row[i+0] = c.b
-            row[i+1] = c.g
-            row[i+2] = c.r
-            i += 3
-        }
-
-        for ; i < rowBytes; i++ {
-            row[i] = 0
-        }
-
-        if _, err := f.Write(row); err != nil {
-            return err
-        }
-    }
-
-    return nil
+	return nil
 }
 
+//
 // ============================================================
 // Helpers
 // ============================================================
-
-func idxOf(x, y int) int {
-    return y*W + x
-}
-
+//
 func wrap(x, m int) int {
-    x %= m
-    if x < 0 {
-        x += m
-    }
-    return x
+	if x < 0 {
+		return x + m
+	}
+	if x >= m {
+		return x - m
+	}
+	return x
 }
 
-func periodicDelta(a, b, m int) float64 {
-    d := math.Abs(float64(a - b))
-    if d > float64(m)/2.0 {
-        d = float64(m) - d
-    }
-    return d
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
-func periodicDistance(x, y, cx, cy int) float64 {
-    dx := periodicDelta(x, cx, W)
-    dy := periodicDelta(y, cy, H)
-    return math.Hypot(dx, dy)
-}
-
-func countOcc(occ []byte) int {
-    n := 0
-    for _, v := range occ {
-        if v != 0 {
-            n++
-        }
-    }
-    return n
-}
-
+//
 // ============================================================
-// RNG: xorshift64*
+// Small, fast RNG (xoshiro256** + splitmix64 seeding)
 // ============================================================
-
-type RNG struct {
-    State uint64
+//
+func rotl64(x uint64, k int) uint64 {
+	return (x << k) | (x >> (64 - k))
 }
 
-func newRNG(seed uint64) RNG {
-    if seed == 0 {
-        seed = 0x9e3779b97f4a7c15
-    }
-    return RNG{State: seed}
+type SplitMix64 struct{ x uint64 }
+
+func (s *SplitMix64) Seed(seed uint64) { s.x = seed }
+
+func (s *SplitMix64) Next() uint64 {
+	s.x += 0x9E3779B97F4A7C15
+	z := s.x
+	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
+	z = (z ^ (z >> 27)) * 0x94D049BB133111EB
+	return z ^ (z >> 31)
 }
 
-func (r *RNG) Uint64() uint64 {
-    x := r.State
-    x ^= x >> 12
-    x ^= x << 25
-    x ^= x >> 27
-    r.State = x
-    return x * 2685821657736338717
+type Xoshiro256ss struct{ s [4]uint64 }
+
+func (x *Xoshiro256ss) Seed(seed uint64) {
+	var sm SplitMix64
+	sm.Seed(seed)
+	x.s[0] = sm.Next()
+	x.s[1] = sm.Next()
+	x.s[2] = sm.Next()
+	x.s[3] = sm.Next()
 }
 
-func (r *RNG) Intn(n int) int {
-    if n <= 0 {
-        panic("Intn with n <= 0")
-    }
-    return int(r.Uint64() % uint64(n))
+func (x *Xoshiro256ss) NextU64() uint64 {
+	result := rotl64(x.s[1]*5, 7) * 9
+	t := x.s[1] << 17
+
+	x.s[2] ^= x.s[0]
+	x.s[3] ^= x.s[1]
+	x.s[1] ^= x.s[2]
+	x.s[0] ^= x.s[3]
+	x.s[2] ^= t
+	x.s[3] = rotl64(x.s[3], 45)
+
+	return result
 }
 
-func (r *RNG) RangeInt(lo, hi int) int {
-    return lo + r.Intn(hi-lo+1)
+func (x *Xoshiro256ss) NextU32() uint32 { return uint32(x.NextU64() >> 32) }
+
+// Float01 returns a uniform float64 in [0, 1).
+func (x *Xoshiro256ss) Float01() float64 {
+	const inv2_53 = 1.0 / (1 << 53)
+	return float64(x.NextU64()>>11) * inv2_53
 }
 
-func (r *RNG) Float01() float64 {
-    const denom = float64(uint64(1) << 53)
-    return float64(r.Uint64()>>11) / denom
+// Unbiased bounded int using rejection sampling
+func randInt(rng *Xoshiro256ss, lo, hi int) int {
+	rngRange := uint32(hi - lo + 1)
+	limit := uint32(0xFFFFFFFF) - (uint32(0xFFFFFFFF) % rngRange)
+	var v uint32
+	for {
+		v = rng.NextU32()
+		if v < limit {
+			break
+		}
+	}
+	return lo + int(v%rngRange)
 }
 
-func (r *RNG) JitterQuarter() float64 {
-    return -0.25 + 0.5*r.Float01()
+//
+// ============================================================
+// Bit-packed occupancy grid
+// ============================================================
+//
+type BitGrid struct {
+	bits []uint64
 }
 
-// SplitMix64-style seed scrambling.
-// This gives well-separated layer seeds even if the base seed is simple.
-func splitSeed(x uint64) uint64 {
-    x += 0x9e3779b97f4a7c15
-    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
-    x = (x ^ (x >> 27)) * 0x94d049bb133111eb
-    return x ^ (x >> 31)
+func NewBitGrid() BitGrid {
+	n := (W*H + 63) / 64
+	return BitGrid{bits: make([]uint64, n)}
 }
 
+func (g *BitGrid) Clear() {
+	for i := range g.bits {
+		g.bits[i] = 0
+	}
+}
+
+func (g *BitGrid) GetXY(x, y int) bool {
+	i := y*W + x
+	return ((g.bits[i>>6] >> uint(i&63)) & 1) != 0
+}
+
+func (g *BitGrid) SetXY(x, y int) {
+	i := y*W + x
+	g.bits[i>>6] |= 1 << uint(i&63)
+}
+
+// estimateCenterRadius derives an approximate center and radius directly
+// from an occupancy grid. Used as a fallback when resuming from a
+// checkpoint written before Center/Radius were tracked explicitly (magic
+// == magicV1) — the exact original seed point can't be recovered, but the
+// centroid of already-stuck pixels is a good stand-in since the cluster is
+// already roughly compact around it.
+func estimateCenterRadius(g *BitGrid) (cx, cy int, radius float64) {
+	var sumX, sumY, n int64
+	for y := 0; y < H; y++ {
+		for x := 0; x < W; x++ {
+			if g.GetXY(x, y) {
+				sumX += int64(x)
+				sumY += int64(y)
+				n++
+			}
+		}
+	}
+	if n == 0 {
+		return W / 2, H / 2, 0
+	}
+	cx = int(sumX / n)
+	cy = int(sumY / n)
+	for y := 0; y < H; y++ {
+		for x := 0; x < W; x++ {
+			if g.GetXY(x, y) {
+				d := math.Hypot(float64(x-cx), float64(y-cy))
+				if d > radius {
+					radius = d
+				}
+			}
+		}
+	}
+	return cx, cy, radius
+}
+
+//
 // ============================================================
 // Layer
 // ============================================================
-
+//
 type Layer struct {
-    Occ     []byte
-    Color   Color
-    RNG     RNG
-    CenterX int
-    CenterY int
-    Radius  float64
+	occ   BitGrid
+	color Color
+	rng   Xoshiro256ss
+
+	// centerX/centerY are the fixed seed-point this layer grows from;
+	// radius is the current max distance from center to any stuck pixel.
+	// Used to launch new walkers close to the cluster instead of
+	// uniformly across the whole canvas — see SpawnMargin above.
+	centerX, centerY int
+	radius           float64
 }
 
-func newLayer(color Color, seed uint64, cx, cy int) Layer {
-    L := Layer{
-        Occ:     make([]byte, W*H),
-        Color:   color,
-        RNG:     newRNG(seed),
-        CenterX: cx,
-        CenterY: cy,
-        Radius:  0,
-    }
-
-    L.Occ[idxOf(cx, cy)] = 1
-    return L
-}
-
+// spawnPoint returns a launch position on a ring just outside the layer's
+// current cluster radius.
 func (L *Layer) spawnPoint() (int, int) {
-    r := L.Radius + SpawnMargin
-    if r < SpawnMargin {
-        r = SpawnMargin
-    }
-
-    theta := L.RNG.Float01() * 2.0 * math.Pi
-
-    x := float64(L.CenterX) + r*math.Cos(theta)
-    y := float64(L.CenterY) + r*math.Sin(theta)
-
-    return wrap(int(math.Round(x)), W), wrap(int(math.Round(y)), H)
+	r := L.radius + SpawnMargin
+	if r < SpawnMargin {
+		r = SpawnMargin
+	}
+	angle := L.rng.Float01() * 2 * math.Pi
+	sx := float64(L.centerX) + r*math.Cos(angle)
+	sy := float64(L.centerY) + r*math.Sin(angle)
+	return wrap(int(math.Round(sx)), W), wrap(int(math.Round(sy)), H)
 }
 
+// updateRadius grows the tracked cluster radius if (x, y) is farther from
+// center than anything stuck so far.
 func (L *Layer) updateRadius(x, y int) {
-    d := periodicDistance(x, y, L.CenterX, L.CenterY)
-    if d > L.Radius {
-        L.Radius = d
-    }
+	d := math.Hypot(float64(x-L.centerX), float64(y-L.centerY))
+	if d > L.radius {
+		L.radius = d
+	}
 }
 
-func (L *Layer) shouldKill(x, y int) bool {
-    limit := L.Radius + SpawnMargin + KillMargin
-    return periodicDistance(x, y, L.CenterX, L.CenterY) > limit
-}
-
-func (L *Layer) hasOccupiedNeighbour(x, y int) bool {
-    for dy := -1; dy <= 1; dy++ {
-        for dx := -1; dx <= 1; dx++ {
-            if dx == 0 && dy == 0 {
-                continue
-            }
-
-            xx := wrap(x+dx, W)
-            yy := wrap(y+dy, H)
-
-            if L.Occ[idxOf(xx, yy)] != 0 {
-                return true
-            }
-        }
-    }
-
-    return false
-}
-
-func (L *Layer) addWalker() bool {
-    x, y := L.spawnPoint()
-
-    for s := 0; s < MaxSteps; s++ {
-        dx, dy := 0, 0
-
-        for dx == 0 && dy == 0 {
-            dx = L.RNG.RangeInt(-1, 1)
-            dy = L.RNG.RangeInt(-1, 1)
-        }
-
-        x = wrap(x+dx, W)
-        y = wrap(y+dy, H)
-
-        if L.shouldKill(x, y) {
-            return false
-        }
-
-        if L.hasOccupiedNeighbour(x, y) {
-            L.Occ[idxOf(x, y)] = 1
-            L.updateRadius(x, y)
-            return true
-        }
-    }
-
-    return false
-}
-
+//
 // ============================================================
-// Thickening
+// Checkpoint I/O (binary occupancy + binary RNG)
 // ============================================================
-
-func thicken(src []byte, out []byte) {
-    for i := range out {
-        out[i] = 0
-    }
-
-    for y := 0; y < H; y++ {
-        for x := 0; x < W; x++ {
-            if src[idxOf(x, y)] == 0 {
-                continue
-            }
-
-            for dy := -ThickRad; dy <= ThickRad; dy++ {
-                for dx := -ThickRad; dx <= ThickRad; dx++ {
-                    if dx*dx+dy*dy <= ThickRad*ThickRad {
-                        xx := wrap(x+dx, W)
-                        yy := wrap(y+dy, H)
-                        out[idxOf(xx, yy)] = 1
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ============================================================
-// Initialization
-// ============================================================
-
-func initializeLayers(seed uint64) []Layer {
-    base := newRNG(splitSeed(seed))
-
-    // Draw order is light to dark.
-    // Later colours overwrite earlier colours in the final stacked BMP,
-    // so dark high-contrast colours are placed later.
-    palette := []Color{
-        YELLOW,
-        GREEN,
-        BLUE,
-        RED,
-        BLACK,
-    }
-
-    layers := make([]Layer, 0, NumLayers)
-
-    cols := 3
-    rows := 2
-    i := 0
-
-    for r := 0; r < rows && i < NumLayers; r++ {
-        for c := 0; c < cols && i < NumLayers; c++ {
-            x := int((float64(c)+0.5+base.JitterQuarter()) * float64(W) / float64(cols))
-            y := int((float64(r)+0.5+base.JitterQuarter()) * float64(H) / float64(rows))
-
-            x = wrap(x, W)
-            y = wrap(y, H)
-
-            layerSeed := splitSeed(seed + uint64(i+1)*0x9e3779b97f4a7c15)
-
-            L := newLayer(palette[i], layerSeed, x, y)
-            layers = append(layers, L)
-
-            i++
-        }
-    }
-
-    return layers
-}
-
-// ============================================================
-// Checkpoint I/O
-// ============================================================
-
+//
 type checkpointJSON struct {
-    Frame int `json:"frame"`
+	Frame int `json:"frame"`
 }
+
+// Checkpoint format versions.
+//
+// magicV1 ("DLA1") is the original format: per layer, just occupancy bits
+// + RNG state. magicV2 ("DLA2") adds a per-layer centerX/centerY/radius
+// triple immediately after the RNG state, used for adaptive walker
+// launching. Bumping the magic (rather than trying to detect the extra
+// fields by EOF) matters here because this format is length-prefixed per
+// layer — blindly attempting to read extra trailing fields on an old file
+// would consume bytes that actually belong to the *next* layer's header,
+// silently corrupting the parse instead of failing cleanly.
+const (
+	magicV1 uint32 = 0x444C4131 // "DLA1" — no center/radius
+	magicV2 uint32 = 0x444C4132 // "DLA2" — adds center/radius per layer
+)
 
 func saveCheckpoint(dir string, frame int, layers []Layer) error {
-    jpath := filepath.Join(dir, "checkpoint.json")
-    bpath := filepath.Join(dir, "checkpoint.bin")
+	jsonTmp := filepath.Join(dir, "checkpoint.json.tmp")
+	binTmp := filepath.Join(dir, "checkpoint.bin.tmp")
+	jsonOut := filepath.Join(dir, "checkpoint.json")
+	binOut := filepath.Join(dir, "checkpoint.bin")
 
-    jf, err := os.Create(jpath)
-    if err != nil {
-        return err
-    }
+	// JSON
+	{
+		f, err := os.Create(jsonTmp)
+		if err != nil {
+			return err
+		}
+		enc := json.NewEncoder(f)
+		enc.SetIndent("", " ")
+		if err := enc.Encode(checkpointJSON{Frame: frame}); err != nil {
+			f.Close()
+			return err
+		}
+		if err := f.Close(); err != nil {
+			return err
+		}
+	}
 
-    enc := json.NewEncoder(jf)
-    enc.SetIndent("", "  ")
+	// BIN (little-endian; matches C++ structure, plus v2 center/radius)
+	{
+		f, err := os.Create(binTmp)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
 
-    if err := enc.Encode(checkpointJSON{Frame: frame}); err != nil {
-        _ = jf.Close()
-        return err
-    }
+		if err := binary.Write(f, binary.LittleEndian, magicV2); err != nil {
+			return err
+		}
+		if err := binary.Write(f, binary.LittleEndian, uint32(W)); err != nil {
+			return err
+		}
+		if err := binary.Write(f, binary.LittleEndian, uint32(H)); err != nil {
+			return err
+		}
+		if err := binary.Write(f, binary.LittleEndian, uint32(len(layers))); err != nil {
+			return err
+		}
 
-    if err := jf.Close(); err != nil {
-        return err
-    }
+		for i := range layers {
+			L := &layers[i]
+			nWords := uint32(len(L.occ.bits))
+			if err := binary.Write(f, binary.LittleEndian, nWords); err != nil {
+				return err
+			}
+			if err := binary.Write(f, binary.LittleEndian, L.occ.bits); err != nil {
+				return err
+			}
+			if err := binary.Write(f, binary.LittleEndian, L.rng.s); err != nil {
+				return err
+			}
+			if err := binary.Write(f, binary.LittleEndian, int32(L.centerX)); err != nil {
+				return err
+			}
+			if err := binary.Write(f, binary.LittleEndian, int32(L.centerY)); err != nil {
+				return err
+			}
+			if err := binary.Write(f, binary.LittleEndian, L.radius); err != nil {
+				return err
+			}
+		}
 
-    bf, err := os.Create(bpath)
-    if err != nil {
-        return err
-    }
-    defer bf.Close()
+		if err := f.Sync(); err != nil {
+			return err
+		}
+	}
 
-    if err := binary.Write(bf, binary.LittleEndian, uint32(len(layers))); err != nil {
-        return err
-    }
+	// Rename temp -> final (same filesystem)
+	if err := os.Rename(jsonTmp, jsonOut); err != nil {
+		_ = os.Remove(jsonTmp)
+		return err
+	}
+	if err := os.Rename(binTmp, binOut); err != nil {
+		_ = os.Remove(binTmp)
+		return err
+	}
 
-    for _, L := range layers {
-        if len(L.Occ) != W*H {
-            return fmt.Errorf("bad occupancy length")
-        }
-
-        if _, err := bf.Write(L.Occ); err != nil {
-            return err
-        }
-
-        if err := binary.Write(bf, binary.LittleEndian, uint8(L.Color)); err != nil {
-            return err
-        }
-
-        if err := binary.Write(bf, binary.LittleEndian, L.RNG.State); err != nil {
-            return err
-        }
-
-        if err := binary.Write(bf, binary.LittleEndian, int32(L.CenterX)); err != nil {
-            return err
-        }
-
-        if err := binary.Write(bf, binary.LittleEndian, int32(L.CenterY)); err != nil {
-            return err
-        }
-
-        if err := binary.Write(bf, binary.LittleEndian, L.Radius); err != nil {
-            return err
-        }
-    }
-
-    return nil
+	return nil
 }
 
-func loadCheckpoint(dir string, frame *int, layers *[]Layer) (bool, error) {
-    jpath := filepath.Join(dir, "checkpoint.json")
-    bpath := filepath.Join(dir, "checkpoint.bin")
+func loadCheckpoint(dir string, layers []Layer) (frame int, err error) {
+	jsonPath := filepath.Join(dir, "checkpoint.json")
+	binPath := filepath.Join(dir, "checkpoint.bin")
 
-    jf, err := os.Open(jpath)
-    if err != nil {
-        if os.IsNotExist(err) {
-            return false, nil
-        }
-        return false, err
-    }
-    defer jf.Close()
+	// JSON
+	{
+		b, e := os.ReadFile(jsonPath)
+		if e != nil {
+			return 0, e
+		}
+		var cj checkpointJSON
+		if e := json.Unmarshal(b, &cj); e != nil {
+			return 0, e
+		}
+		frame = cj.Frame
+	}
 
-    bf, err := os.Open(bpath)
-    if err != nil {
-        if os.IsNotExist(err) {
-            return false, nil
-        }
-        return false, err
-    }
-    defer bf.Close()
+	// BIN
+	f, err := os.Open(binPath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
 
-    var cj checkpointJSON
-    if err := json.NewDecoder(jf).Decode(&cj); err != nil {
-        return false, err
-    }
+	var magic, w, h, nLayers uint32
+	if err := binary.Read(f, binary.LittleEndian, &magic); err != nil {
+		return 0, err
+	}
+	if err := binary.Read(f, binary.LittleEndian, &w); err != nil {
+		return 0, err
+	}
+	if err := binary.Read(f, binary.LittleEndian, &h); err != nil {
+		return 0, err
+	}
+	if err := binary.Read(f, binary.LittleEndian, &nLayers); err != nil {
+		return 0, err
+	}
 
-    *frame = cj.Frame
+	if (magic != magicV1 && magic != magicV2) || int(w) != W || int(h) != H || int(nLayers) != len(layers) {
+		return 0, errors.New("invalid checkpoint header")
+	}
 
-    var n uint32
-    if err := binary.Read(bf, binary.LittleEndian, &n); err != nil {
-        return false, err
-    }
+	for i := range layers {
+		L := &layers[i]
+		var nWords uint32
+		if err := binary.Read(f, binary.LittleEndian, &nWords); err != nil {
+			return 0, err
+		}
+		if int(nWords) != len(L.occ.bits) {
+			return 0, errors.New("invalid checkpoint word count")
+		}
+		if err := binary.Read(f, binary.LittleEndian, L.occ.bits); err != nil {
+			return 0, err
+		}
+		if err := binary.Read(f, binary.LittleEndian, &L.rng.s); err != nil {
+			return 0, err
+		}
 
-    if n != NumLayers {
-        return false, fmt.Errorf("checkpoint has %d layers, expected %d", n, NumLayers)
-    }
+		if magic == magicV2 {
+			var cx, cy int32
+			var radius float64
+			if err := binary.Read(f, binary.LittleEndian, &cx); err != nil {
+				return 0, err
+			}
+			if err := binary.Read(f, binary.LittleEndian, &cy); err != nil {
+				return 0, err
+			}
+			if err := binary.Read(f, binary.LittleEndian, &radius); err != nil {
+				return 0, err
+			}
+			L.centerX, L.centerY, L.radius = int(cx), int(cy), radius
+		} else {
+			// magicV1: no center/radius on disk — estimate from the
+			// occupancy bits we just loaded.
+			ecx, ecy, erad := estimateCenterRadius(&L.occ)
+			fmt.Printf(
+				"Layer %d: v1 checkpoint predates center/radius tracking — "+
+					"estimated center=(%d,%d) radius=%.1f from occupancy\n",
+				i, ecx, ecy, erad,
+			)
+			L.centerX, L.centerY, L.radius = ecx, ecy, erad
+		}
+	}
 
-    loaded := make([]Layer, NumLayers)
+	// Ignore any trailing bytes (future extensibility)
+	_, _ = io.Copy(io.Discard, f)
 
-    for i := 0; i < NumLayers; i++ {
-        loaded[i].Occ = make([]byte, W*H)
-
-        if _, err := io.ReadFull(bf, loaded[i].Occ); err != nil {
-            return false, err
-        }
-
-        var c uint8
-        if err := binary.Read(bf, binary.LittleEndian, &c); err != nil {
-            return false, err
-        }
-        loaded[i].Color = Color(c)
-
-        if err := binary.Read(bf, binary.LittleEndian, &loaded[i].RNG.State); err != nil {
-            return false, err
-        }
-
-        var cx, cy int32
-
-        if err := binary.Read(bf, binary.LittleEndian, &cx); err != nil {
-            return false, err
-        }
-
-        if err := binary.Read(bf, binary.LittleEndian, &cy); err != nil {
-            return false, err
-        }
-
-        if err := binary.Read(bf, binary.LittleEndian, &loaded[i].Radius); err != nil {
-            return false, err
-        }
-
-        loaded[i].CenterX = int(cx)
-        loaded[i].CenterY = int(cy)
-    }
-
-    *layers = loaded
-    return true, nil
+	return frame, nil
 }
 
+//
 // ============================================================
-// Rendering
+// Thickening (fractional Euclidean radius on periodic domain)
 // ============================================================
+//
+func thicken(src *BitGrid, dst *[]uint8) {
+	out := make([]uint8, W*H)
 
-func renderComposite(outDir string, layers []Layer) error {
-    img := make([]Color, W*H)
-    for i := range img {
-        img[i] = WHITE
-    }
+	// 2× supersample
+	SW := 2 * W
+	SH := 2 * H
 
-    thick := make([]byte, W*H)
+	hiOcc := make([]uint8, SW*SH)
+	hiDil := make([]uint8, SW*SH)
 
-    // Stack layers in palette order.
-    // Later layers overwrite earlier layers where visual thickening overlaps.
-    for i := range layers {
-        thicken(layers[i].Occ, thick)
+	// Map each low-res occupied pixel to center of 2×2 block (odd coords)
+	for y := 0; y < H; y++ {
+		for x := 0; x < W; x++ {
+			if !src.GetXY(x, y) {
+				continue
+			}
+			hx := 2*x + 1
+			hy := 2*y + 1
+			hiOcc[hy*SW+hx] = 1
+		}
+	}
 
-        for p := 0; p < W*H; p++ {
-            if thick[p] != 0 {
-                img[p] = layers[i].Color
-            }
-        }
-    }
+	Rhi := THICK_R * 2.0
+	R := int(math.Ceil(Rhi))
+	R2 := Rhi * Rhi
 
-    return writeBMP24(filepath.Join(outDir, "current.bmp"), img)
+	wrapHi := func(v, m int) int {
+		if v < 0 {
+			return v + m
+		}
+		if v >= m {
+			return v - m
+		}
+		return v
+	}
+
+	// Stamp disk around each occupied high-res point
+	for hy := 0; hy < SH; hy++ {
+		rowBase := hy * SW
+		for hx := 0; hx < SW; hx++ {
+			if hiOcc[rowBase+hx] == 0 {
+				continue
+			}
+			for dy := -R; dy <= R; dy++ {
+				for dx := -R; dx <= R; dx++ {
+					if float64(dx*dx+dy*dy) > R2 {
+						continue
+					}
+					xx := wrapHi(hx+dx, SW)
+					yy := wrapHi(hy+dy, SH)
+					hiDil[yy*SW+xx] = 1
+				}
+			}
+		}
+	}
+
+	// Downsample: if any pixel in 2×2 block is set
+	for y := 0; y < H; y++ {
+		by := 2 * y
+		for x := 0; x < W; x++ {
+			bx := 2 * x
+			v := hiDil[(by+0)*SW+(bx+0)] |
+				hiDil[(by+0)*SW+(bx+1)] |
+				hiDil[(by+1)*SW+(bx+0)] |
+				hiDil[(by+1)*SW+(bx+1)]
+			if v != 0 {
+				out[y*W+x] = 1
+			}
+		}
+	}
+
+	*dst = out
 }
 
+//
 // ============================================================
-// CLI
+// One frame of growth for one layer (optimized inner loop)
 // ============================================================
-
-func usage() {
-    fmt.Fprintln(os.Stderr, "Usage:")
-    fmt.Fprintln(os.Stderr, "  ./dla out --init [--seed S]")
-    fmt.Fprintln(os.Stderr, "  ./dla out --to N [--seed S]")
+//
+var dirs = [8][2]int8{
+	{-1, -1}, {0, -1}, {1, -1},
+	{-1, 0}, {1, 0},
+	{-1, 1}, {0, 1}, {1, 1},
 }
 
+func advanceOneFrame(L *Layer) {
+	for p := 0; p < WALKERS_PER_FRAME; p++ {
+		x, y := L.spawnPoint()
+
+		for s := 0; s < MAX_STEPS; s++ {
+			si := randInt(&L.rng, 0, 7)
+			dx := int(dirs[si][0])
+			dy := int(dirs[si][1])
+
+			x += dx
+			if x < 0 {
+				x += W
+			} else if x >= W {
+				x -= W
+			}
+
+			y += dy
+			if y < 0 {
+				y += H
+			} else if y >= H {
+				y -= H
+			}
+
+			x0 := x
+			y0 := y
+
+			xl := x0 - 1
+			if xl < 0 {
+				xl = W - 1
+			}
+			xr := x0 + 1
+			if xr >= W {
+				xr = 0
+			}
+			yu := y0 - 1
+			if yu < 0 {
+				yu = H - 1
+			}
+			yd := y0 + 1
+			if yd >= H {
+				yd = 0
+			}
+
+			if L.occ.GetXY(xl, yu) ||
+				L.occ.GetXY(x0, yu) ||
+				L.occ.GetXY(xr, yu) ||
+				L.occ.GetXY(xl, y0) ||
+				L.occ.GetXY(xr, y0) ||
+				L.occ.GetXY(xl, yd) ||
+				L.occ.GetXY(x0, yd) ||
+				L.occ.GetXY(xr, yd) {
+				L.occ.SetXY(x0, y0)
+				L.updateRadius(x0, y0)
+				break
+			}
+		}
+	}
+}
+
+//
 // ============================================================
 // Main
 // ============================================================
+//
+func usage() {
+	fmt.Fprintln(os.Stderr, "Usage:")
+	fmt.Fprintln(os.Stderr, "  dla out --init [--seed N]")
+	fmt.Fprintln(os.Stderr, "  dla out --to N [--seed N]")
+}
+
+func randSeedU64() (uint64, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint64(b[:]), nil
+}
+
+// parseSeedFlag scans args for a "--seed N" pair and returns the parsed
+// value. Only meaningful on --init (or a --to that ends up initializing
+// because no checkpoint exists yet) — it has no effect once a checkpoint
+// is being resumed, same convention as fractal.x's -seed.
+func parseSeedFlag(args []string) (uint64, bool, error) {
+	for i, a := range args {
+		if a == "--seed" {
+			if i+1 >= len(args) {
+				return 0, false, errors.New("--seed requires a value")
+			}
+			v, err := strconv.ParseUint(args[i+1], 10, 64)
+			if err != nil {
+				return 0, false, fmt.Errorf("invalid --seed value: %w", err)
+			}
+			return v, true, nil
+		}
+	}
+	return 0, false, nil
+}
 
 func main() {
-    if len(os.Args) < 3 {
-        usage()
-        os.Exit(1)
-    }
+	if len(os.Args) < 3 {
+		usage()
+		os.Exit(1)
+	}
 
-    outDir := os.Args[1]
+	outDir := os.Args[1]
+	mode := os.Args[2]
 
-    if err := os.MkdirAll(outDir, 0o755); err != nil {
-        fmt.Fprintln(os.Stderr, "Failed to create output directory:", err)
-        os.Exit(1)
-    }
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		os.Exit(1)
+	}
 
-    initOnly := false
-    targetFrame := -1
+	doInit := mode == "--init"
+	doTo := mode == "--to"
+	targetFrame := 0
+	var seedArgs []string
 
-    var seed uint64
-    haveSeed := false
+	if doTo {
+		if len(os.Args) < 4 {
+			fmt.Fprintln(os.Stderr, "Missing N for --to")
+			os.Exit(1)
+		}
+		n, err := strconv.Atoi(os.Args[3])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Invalid N for --to:", err)
+			os.Exit(1)
+		}
+		if n < 0 {
+			n = 0
+		}
+		targetFrame = n
+		seedArgs = os.Args[4:]
+	} else if doInit {
+		seedArgs = os.Args[3:]
+	} else {
+		fmt.Fprintln(os.Stderr, "Unknown mode. Use --init or --to N")
+		os.Exit(1)
+	}
 
-    args := os.Args[2:]
+	seedOverride, haveSeedOverride, err := parseSeedFlag(seedArgs)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		os.Exit(1)
+	}
 
-    for i := 0; i < len(args); i++ {
-        switch args[i] {
-        case "--init":
-            initOnly = true
+	layers := make([]Layer, 5)
+	for i := range layers {
+		layers[i].occ = NewBitGrid()
+		layers[i].color = WHITE
+	}
 
-        case "--to":
-            if i+1 >= len(args) {
-                fmt.Fprintln(os.Stderr, "--to requires a frame number")
-                os.Exit(1)
-            }
+	pal := [5]Color{BLUE, GREEN, RED, YELLOW, BLACK}
 
-            n, err := strconv.Atoi(args[i+1])
-            if err != nil || n < 0 {
-                fmt.Fprintln(os.Stderr, "Bad frame number")
-                os.Exit(1)
-            }
+	// ---------- INIT ----------
+	if doInit {
+		seed := seedOverride
+		if !haveSeedOverride {
+			s, err := randSeedU64()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "ERROR: cannot seed RNG:", err)
+				os.Exit(1)
+			}
+			seed = s
+		}
 
-            targetFrame = n
-            i++
+		var sm SplitMix64
+		sm.Seed(seed)
 
-        case "--seed":
-            if i+1 >= len(args) {
-                fmt.Fprintln(os.Stderr, "--seed requires a value")
-                os.Exit(1)
-            }
+		// (next >> 11) / 2^53
+		const inv2_53 = 1.0 / (1 << 53)
+		urand01 := func() float64 {
+			return float64(sm.Next()>>11) * inv2_53
+		}
 
-            n, err := strconv.ParseUint(args[i+1], 10, 64)
-            if err != nil {
-                fmt.Fprintln(os.Stderr, "Bad seed value")
-                os.Exit(1)
-            }
+		cols, rows := 3, 2
+		k := 0
+		for r := 0; r < rows && k < 5; r++ {
+			for c := 0; c < cols && k < 5; c++ {
+				jx := (urand01() - 0.5) * 0.5 // [-0.25, 0.25]
+				jy := (urand01() - 0.5) * 0.5
 
-            seed = n
-            haveSeed = true
-            i++
+				x := int((float64(c)+0.5+jx)*float64(W) / float64(cols))
+				y := int((float64(r)+0.5+jy)*float64(H) / float64(rows))
+				x = clamp(x, 0, W-1)
+				y = clamp(y, 0, H-1)
 
-        default:
-            fmt.Fprintln(os.Stderr, "Bad arg:", args[i])
-            usage()
-            os.Exit(1)
-        }
-    }
+				layers[k].color = pal[k]
+				layers[k].occ.Clear()
 
-    if initOnly && targetFrame >= 0 {
-        fmt.Fprintln(os.Stderr, "Use either --init or --to N, not both")
-        os.Exit(1)
-    }
+				// seed tuft 3x3
+				for dy := -1; dy <= 1; dy++ {
+					for dx := -1; dx <= 1; dx++ {
+						xx := wrap(x+dx, W)
+						yy := wrap(y+dy, H)
+						layers[k].occ.SetXY(xx, yy)
+					}
+				}
 
-    if !initOnly && targetFrame < 0 {
-        usage()
-        os.Exit(1)
-    }
+				layers[k].centerX = x
+				layers[k].centerY = y
+				layers[k].radius = math.Sqrt2 // corner of the 3x3 tuft
 
-    if !haveSeed {
-        seed = uint64(time.Now().UnixNano())
-    }
+				layers[k].rng.Seed(seed + uint64(k)*0x9E3779B97F4A7C15)
+				k++
+			}
+		}
 
-    var layers []Layer
-    curFrame := 0
+		if err := saveCheckpoint(outDir, 0, layers); err != nil {
+			fmt.Fprintln(os.Stderr, "ERROR: failed to write checkpoint:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Initialized frame 0 (seed=%d)\n", seed)
+		return
+	}
 
-    if initOnly {
-        fmt.Printf("Initializing frame 0 with seed %d\n", seed)
+	// ---------- RESUME ----------
+	curFrame, err := loadCheckpoint(outDir, layers)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "No valid checkpoint found. Run --init first.")
+		fmt.Fprintln(os.Stderr, "Details:", err)
+		os.Exit(1)
+	}
+	for i := 0; i < 5; i++ {
+		layers[i].color = pal[i]
+	}
+	fmt.Println("Resuming from frame", curFrame)
 
-        layers = initializeLayers(seed)
+	// ---------- ADVANCE ----------
+	if curFrame < targetFrame {
+		for f := curFrame + 1; f <= targetFrame; f++ {
+			for i := range layers {
+				advanceOneFrame(&layers[i])
+			}
 
-        for i := range layers {
-            fmt.Printf(
-                "Layer %d: start=(%d,%d), seed=%d\n",
-                i,
-                layers[i].CenterX,
-                layers[i].CenterY,
-                layers[i].RNG.State,
-            )
-        }
+			// Intermediate checkpoints
+			if checkpointEvery > 0 && (f%checkpointEvery == 0) {
+				if err := saveCheckpoint(outDir, f, layers); err != nil {
+					fmt.Fprintln(os.Stderr, "ERROR: failed checkpoint at frame", f, ":", err)
+					os.Exit(1)
+				}
+			}
+		}
 
-        if err := saveCheckpoint(outDir, 0, layers); err != nil {
-            fmt.Fprintln(os.Stderr, "Failed to save checkpoint:", err)
-            os.Exit(1)
-        }
+		if err := saveCheckpoint(outDir, targetFrame, layers); err != nil {
+			fmt.Fprintln(os.Stderr, "ERROR: failed to write final checkpoint:", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Println("Already at or beyond requested frame", targetFrame, "(render only)")
+	}
 
-        if err := renderComposite(outDir, layers); err != nil {
-            fmt.Fprintln(os.Stderr, "Failed to write BMP:", err)
-            os.Exit(1)
-        }
+	// ---------- RENDER ----------
+	img := make([]Color, W*H)
+	for i := range img {
+		img[i] = WHITE
+	}
+	var thick []uint8
 
-        fmt.Printf("Done. Wrote %s\n", filepath.Join(outDir, "current.bmp"))
-        return
-    }
+	for i := 0; i < 5; i++ {
+		thicken(&layers[i].occ, &thick)
+		for p := 0; p < len(img); p++ {
+			if thick[p] != 0 {
+				img[p] = layers[i].color
+			}
+		}
+	}
 
-    ok, err := loadCheckpoint(outDir, &curFrame, &layers)
-    if err != nil {
-        fmt.Fprintln(os.Stderr, "Failed to load checkpoint:", err)
-        os.Exit(1)
-    }
+	// NOTE: renamed from "latest_display.bmp" to "current.bmp" to match
+	// what the sidecar (main.py) actually looks for after each --to call.
+	outPath := filepath.Join(outDir, "current.bmp")
+	if err := writeBMP24(outPath, img); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		os.Exit(1)
+	}
 
-    if ok {
-        fmt.Printf("Resuming from frame %d\n", curFrame)
-    } else {
-        fmt.Printf("No checkpoint found; initializing frame 0 with seed %d\n", seed)
-
-        layers = initializeLayers(seed)
-        curFrame = 0
-
-        for i := range layers {
-            fmt.Printf(
-                "Layer %d: start=(%d,%d), seed=%d\n",
-                i,
-                layers[i].CenterX,
-                layers[i].CenterY,
-                layers[i].RNG.State,
-            )
-        }
-
-        if err := saveCheckpoint(outDir, 0, layers); err != nil {
-            fmt.Fprintln(os.Stderr, "Failed to save checkpoint:", err)
-            os.Exit(1)
-        }
-    }
-
-    if targetFrame < curFrame {
-        fmt.Fprintf(
-            os.Stderr,
-            "Target frame %d is before current checkpoint frame %d\n",
-            targetFrame,
-            curFrame,
-        )
-        os.Exit(1)
-    }
-
-    for f := curFrame + 1; f <= targetFrame; f++ {
-        fmt.Printf("Frame %d:", f)
-
-        for li := range layers {
-            stuck := 0
-
-            for p := 0; p < WalkersPerFrame; p++ {
-                if layers[li].addWalker() {
-                    stuck++
-                }
-            }
-
-            fmt.Printf(
-                " L%d stuck=%d total=%d r=%.1f",
-                li,
-                stuck,
-                countOcc(layers[li].Occ),
-                layers[li].Radius,
-            )
-        }
-
-        fmt.Println()
-
-        if err := saveCheckpoint(outDir, f, layers); err != nil {
-            fmt.Fprintln(os.Stderr, "Failed to save checkpoint:", err)
-            os.Exit(1)
-        }
-    }
-
-    if err := renderComposite(outDir, layers); err != nil {
-        fmt.Fprintln(os.Stderr, "Failed to write BMP:", err)
-        os.Exit(1)
-    }
-
-    fmt.Printf("Done. Frame %d written to %s\n", targetFrame, filepath.Join(outDir, "current.bmp"))
+	fmt.Println("Done. Frame", targetFrame, "saved.")
 }
+
