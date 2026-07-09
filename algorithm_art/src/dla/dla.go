@@ -217,7 +217,7 @@ func (L *Layer) spawnPoint() (int, int) {
     if r < SpawnMargin {
         r = SpawnMargin
     }
-    angle := L.rng.Float01() * 2 * math.Pi
+    angle := L.RNG.Float01() * 2 * math.Pi
     sx := float64(L.CenterX) + r*math.Cos(angle)
     sy := float64(L.CenterY) + r*math.Sin(angle)
     return wrap(int(math.Round(sx)), W), wrap(int(math.Round(sy)), H)
