@@ -212,19 +212,16 @@ func newLayer() Layer {
 		RNG:   newRNG(1),
 	}
 }
-// spawnPoint returns a launch position on a ring just outside the layer's
-// current cluster radius.
 func (L *Layer) spawnPoint() (int, int) {
-	r := L.Radius + SpawnMargin
-	if r < SpawnMargin {
-		r = SpawnMargin
-	}
-	angle := L.rng.Float01() * 2 * math.Pi
-	sx := float64(L.CenterX) + r*math.Cos(angle)
-	sy := float64(L.CenterY) + r*math.Sin(angle)
-	return wrap(int(math.Round(sx)), W), wrap(int(math.Round(sy)), H)
+    r := L.Radius + SpawnMargin
+    if r < SpawnMargin {
+        r = SpawnMargin
+    }
+    angle := L.rng.Float01() * 2 * math.Pi
+    sx := float64(L.CenterX) + r*math.Cos(angle)
+    sy := float64(L.CenterY) + r*math.Sin(angle)
+    return wrap(int(math.Round(sx)), W), wrap(int(math.Round(sy)), H)
 }
-
 // updateRadius grows the tracked cluster radius using periodic distance.
 func (L *Layer) updateRadius(x, y int) {
 	// Find the shortest path along the X axis (allowing for screen wrap)
