@@ -1,15 +1,9 @@
 package main
 
 import (
-	"encoding/binary"
-	"encoding/json"
-	"flag"
-	"fmt"
-	"math"
-	"math/rand"
-	"os"
-	"path/filepath"
-	"time"
+    "image"
+    "image/color"
+    "golang.org/x/image/bmp"
 )
 
 // ------------------------------------------------------------
@@ -213,74 +207,46 @@ func render(
 
 // ------------------------------------------------------------
 // BMP writer (8-bit indexed, atomic)
-//
-// Written bottom-up (standard positive-height BMP) rather than top-down.
-// Top-down (negative height) is valid per the BMP spec, but a lot of
-// minimal/embedded BMP decoders — the kind typically used on e-paper
-// display firmware — only implement the classic bottom-up case and will
-// silently reject or mis-render a top-down file. Bottom-up costs nothing
-// here (we already hold the whole frame in memory) and is the safer,
-// more widely-compatible choice.
-// ------------------------------------------------------------
-
 func writeBMPAtomic(path string, pixels []uint8, width, height int) error {
-	tmp := path + ".tmp"
+    tmp := path + ".tmp"
 
-	rowSize := (width + 3) & ^3
-	imgSize := rowSize * height
+    img := image.NewRGBA(image.Rect(0, 0, width, height))
 
-	f, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+    for y := 0; y < height; y++ {
+        for x := 0; x < width; x++ {
+            idx := pixels[y*width+x]
 
-	// File header
-	binary.Write(f, binary.LittleEndian, uint16(0x4D42))
-	binary.Write(f, binary.LittleEndian,
-		uint32(14+40+256*4+imgSize))
-	binary.Write(f, binary.LittleEndian, uint16(0))
-	binary.Write(f, binary.LittleEndian, uint16(0))
-	binary.Write(f, binary.LittleEndian,
-		uint32(14+40+256*4))
+            if int(idx) >= len(acepPalette) {
+                idx = BLACK
+            }
 
-	// DIB header
-	binary.Write(f, binary.LittleEndian, uint32(40))
-	binary.Write(f, binary.LittleEndian, int32(width))
-	binary.Write(f, binary.LittleEndian, int32(height)) // positive = bottom-up
-	binary.Write(f, binary.LittleEndian, uint16(1))
-	binary.Write(f, binary.LittleEndian, uint16(8))
-	binary.Write(f, binary.LittleEndian, uint32(0))
-	binary.Write(f, binary.LittleEndian, uint32(imgSize))
-	binary.Write(f, binary.LittleEndian, int32(2835))
-	binary.Write(f, binary.LittleEndian, int32(2835))
-	binary.Write(f, binary.LittleEndian, uint32(256))
-	binary.Write(f, binary.LittleEndian, uint32(0))
+            p := acepPalette[idx]
 
-	for i := 0; i < 256; i++ {
-		if i < len(acepPalette) {
-			p := acepPalette[i]
-			f.Write([]byte{p.B, p.G, p.R, p.A})
-		} else {
-			f.Write([]byte{0, 0, 0, 0})
-		}
-	}
+            img.SetRGBA(x, y, color.RGBA{
+                R: p.R,
+                G: p.G,
+                B: p.B,
+                A: 255,
+            })
+        }
+    }
 
-	// Bottom-up: last image row is written first.
-	row := make([]byte, rowSize)
-	for y := height - 1; y >= 0; y-- {
-		copy(row, pixels[y*width:(y+1)*width])
-		if _, err := f.Write(row); err != nil {
-			return err
-		}
-	}
+    f, err := os.Create(tmp)
+    if err != nil {
+        return err
+    }
 
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+    if err := bmp.Encode(f, img); err != nil {
+        f.Close()
+        return err
+    }
+
+    if err := f.Close(); err != nil {
+        return err
+    }
+
+    return os.Rename(tmp, path)
 }
-
 // ------------------------------------------------------------
 // Main
 // ------------------------------------------------------------
