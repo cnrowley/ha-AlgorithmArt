@@ -212,40 +212,37 @@ func newLayer() Layer {
 		RNG:   newRNG(1),
 	}
 }
-
 // spawnPoint returns a launch position on a ring just outside the layer's
-// current cluster radius, so new walkers start close enough to actually
-// reach the cluster within MaxSteps regardless of how large it's grown.
+// current cluster radius.
 func (L *Layer) spawnPoint() (int, int) {
 	r := L.Radius + SpawnMargin
 	if r < SpawnMargin {
 		r = SpawnMargin
 	}
-	angle := L.RNG.Float01() * 2 * math.Pi
+	angle := L.rng.Float01() * 2 * math.Pi
 	sx := float64(L.CenterX) + r*math.Cos(angle)
 	sy := float64(L.CenterY) + r*math.Sin(angle)
 	return wrap(int(math.Round(sx)), W), wrap(int(math.Round(sy)), H)
 }
 
-// updateRadius grows the tracked cluster radius if (x, y) is farther from
-// center than anything stuck so far.
+// updateRadius grows the tracked cluster radius using periodic distance.
 func (L *Layer) updateRadius(x, y int) {
 	// Find the shortest path along the X axis (allowing for screen wrap)
-	dx := math.Abs(float64(x - L.centerX))
+	dx := math.Abs(float64(x - L.CenterX))
 	if dx > float64(W)/2.0 {
 		dx = float64(W) - dx
 	}
 
 	// Find the shortest path along the Y axis
-	dy := math.Abs(float64(y - L.centerY))
+	dy := math.Abs(float64(y - L.CenterY))
 	if dy > float64(H)/2.0 {
 		dy = float64(H) - dy
 	}
 
 	// Calculate true periodic distance
 	d := math.Hypot(dx, dy)
-	if d > L.radius {
-		L.radius = d
+	if d > L.Radius {
+		L.Radius = d
 	}
 }
 
