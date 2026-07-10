@@ -29,7 +29,7 @@ const (
     MaxSteps        = 6000
 
     // Visual thickening only; does not affect growth.
-    ThickRad = 3
+    ThickRad = 2
 
     // Walkers are launched this far outside the current cluster radius.
     SpawnMargin = 30.0
@@ -40,32 +40,33 @@ const (
 )
 
 // ============================================================
-// Colour
+// Colour: PhotoPainter S3-safe palette
+// Same colour set as the working goban renderer.
 // ============================================================
 
 type Color uint8
 
 const (
     WHITE Color = iota
+    BLACK
+    RED
+    YELLOW
     BLUE
     GREEN
-    RED
-    ORANGE
-    PURPLE
 )
 
 func toRGBA(c Color) color.RGBA {
     switch c {
+    case BLACK:
+        return color.RGBA{0, 0, 0, 255}
+    case RED:
+        return color.RGBA{255, 0, 0, 255}
+    case YELLOW:
+        return color.RGBA{255, 255, 0, 255}
     case BLUE:
         return color.RGBA{0, 0, 255, 255}
     case GREEN:
-        return color.RGBA{0, 200, 0, 255}
-    case RED:
-        return color.RGBA{220, 0, 0, 255}
-    case ORANGE:
-        return color.RGBA{255, 140, 0, 255}
-    case PURPLE:
-        return color.RGBA{150, 0, 220, 255}
+        return color.RGBA{0, 255, 0, 255}
     default:
         return color.RGBA{255, 255, 255, 255}
     }
@@ -156,6 +157,7 @@ func (r *RNG) JitterQuarter() float64 {
 }
 
 // SplitMix64-style seed scrambling.
+// This gives well-separated layer seeds even if the base seed is simple.
 func splitSeed(x uint64) uint64 {
     x += 0x9e3779b97f4a7c15
     x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
@@ -298,14 +300,17 @@ func thicken(src []byte, out []byte) {
 func initializeLayers(seed uint64) []Layer {
     base := newRNG(splitSeed(seed))
 
-    // Draw order. These are all saturated colours and avoid pure black,
-    // which can dominate on limited or thresholding display pipelines.
+    // Bottom-to-top layer order.
+    // Later layers overwrite earlier layers during rendering.
+    //
+    // This keeps black at the bottom so it does not wipe out the colour layers.
+    // All colours are PhotoPainter S3-safe.
     palette := []Color{
-        BLUE,
+        YELLOW,
         GREEN,
+        BLUE,
         RED,
-        ORANGE,
-        PURPLE,
+        BLACK,
     }
 
     layers := make([]Layer, 0, NumLayers)
@@ -486,7 +491,7 @@ func loadCheckpoint(dir string, frame *int, layers *[]Layer) (bool, error) {
 }
 
 // ============================================================
-// Rendering using golang.org/x/image/bmp
+// Rendering with golang.org/x/image/bmp
 // ============================================================
 
 func renderComposite(outDir string, layers []Layer) error {
@@ -502,8 +507,8 @@ func renderComposite(outDir string, layers []Layer) error {
 
     thick := make([]byte, W*H)
 
-    // Stacked composite. Later layers overwrite earlier layers only
-    // where their thickened pixels overlap.
+    // True stacked composite:
+    // later layers overwrite earlier layers where their thickened pixels overlap.
     for i := range layers {
         thicken(layers[i].Occ, thick)
 
@@ -633,11 +638,12 @@ func main() {
 
         for i := range layers {
             fmt.Printf(
-                "Layer %d: start=(%d,%d), seed=%d\n",
+                "Layer %d: start=(%d,%d), seed=%d, color=%d\n",
                 i,
                 layers[i].CenterX,
                 layers[i].CenterY,
                 layers[i].RNG.State,
+                layers[i].Color,
             )
         }
 
@@ -671,11 +677,12 @@ func main() {
 
         for i := range layers {
             fmt.Printf(
-                "Layer %d: start=(%d,%d), seed=%d\n",
+                "Layer %d: start=(%d,%d), seed=%d, color=%d\n",
                 i,
                 layers[i].CenterX,
                 layers[i].CenterY,
                 layers[i].RNG.State,
+                layers[i].Color,
             )
         }
 
@@ -731,3 +738,4 @@ func main() {
 
     fmt.Printf("Done. Frame %d written to %s\n", targetFrame, filepath.Join(outDir, "current.bmp"))
 }
+
