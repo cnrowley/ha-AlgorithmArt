@@ -1,60 +1,49 @@
-# AlgorithmArt
+# AlgorithmArt Home Assistant App
 
-[Home Assistant](https://www.home-assistant.io/) integration and companion add-on for driving the [[Waveshare ESP32-S3-PhotoPainter](https://www.waveshare.com/esp32-s3-photopainter.htm)]
-— with built-in generative art (diffusion-limited aggregation, fractal zoom) and a Go (board game) SGF replay generator. This generates images on a Home Assistant server and pushes them to the Photopainter device. This App runs as a separate Docker image with a web interface on the Home Assistant server
----
+A [Home Assistant](https://www.home-assistant.io/) integration and companion add-on for driving the [Waveshare ESP32-S3-PhotoPainter](https://www.waveshare.com/esp32-s3-photopainter.htm)
+— with built-in generative art (diffusion-limited aggregation, fractal zoom) and a Go (board game) SGF replay generator. This generates images on a Home Assistant server and pushes them to the Photopainter device. This App runs as a separate Docker image with a web interface on the Home Assistant server. The generated images can be displayed manually or at periodic intervals. These options are selected through a web interface. The App is designed to be used with the [custom firmware](https://aitjcize.github.io/esp32-photoframe/) desveloepd by aitjcize.
 
 ## Examples
 
 AlgorithmArt is designed to generate visually interesting content for the
-**PhotoPainter S3 7-color ACeP e-paper display** from Home Assistant. The
-generated images can be displayed manually, on a schedule, or as part of a
-Home Assistant automation.
+**PhotoPainter S3 7-color ACeP e-paper display** from Home Assistant. 
 [[https://www.waveshare.com/esp32-s3-photopainter.htm]]
 
 ### Diffusion-Limited Aggregation (DLA)
 
-[DLA](https://en.wikipedia.org/wiki/Diffusion-d_aggregation is a
+[DLA](https://en.wikipedia.org/wiki/Diffusion-d_aggregation) is a
 classic growth model in which particles perform random walks and stick when
 they touch an existing structure. The resulting patterns resemble coral,
-lightning, roots, snowflakes, and other natural branching forms.
+lightning, roots, snowflakes, and other natural branching forms. The display will generate stacked layers of 2D DLA forms in the 
 
-![Diffes/dla.png
+![Diffusion-Limited Aggregation](https://raw.githubusercontent.com/cnrowley/ha-AlgorithmArt/refs/heads/main/docs/images/dla.png)
 
-The DLA generator maintains state between updates, allowing a Home Assistant
-automation or the built-in scheduler to grow the artwork over time and turn
-the display into a continuously evolving piece of generative art.
+The DLA generator maintains state between updates, allowing a Home Assistant automation or the built-in scheduler to grow the artwork over time and turn the display into a continuously evolving piece of generative art.
 
 ### Mandelbrot Fractal Zoom
 
 The fractal generator renders the
 [Mandelbrot set](https://en.wikipedia.org/wiki/Mandelbrot_set), one of the
-best-known exampleseeper
-into the set, intricate self-similar structures emerge at every scale.
+best-known fractal patterns, where intricate self-similar structures emerge at every scale.
 
-!Mandelbrot fractal example
+![Mandelbrot fractal example](https://raw.githubusercontent.com/cnrowley/ha-AlgorithmArt/refs/heads/main/docs/images/fractal.png)
 
-AlgorithmArt adapts the rendering to the PhotoPainter's 7-color e-paper
-palette, producing detailed mathematical artwork optimized for the display.
+The fractal generator works in two modes - a single shot mode where an new fractal image is generated at each cycle, and zoom mode, where each update zooms deeper into the previous image. Currently, fractals only generate two-colour images, which can be chosen by the user in the Web UI.
 
 ### Go (Board Game) Replay
 
-https://en.wikipedia.org/wiki/Go_(game) is a classic abstract strategy
-board game played for more than 2,500 years. AlgorithmArt can replay games
-from standard SGF files, advancing move-by-move with each update.
+Go(https://en.wikipedia.org/wiki/Go_(game)) is a classic abstract strategy
+board game played for more than 2,500 years. Opponents take turns placing stones on a 19 by 19 grid, attempting to enclose area on the board and capture the pieces of the opponent. AlgorithmArt can replay games from standard SGF files, advancing move-by-move with each update.  The user can choose which game to play and the colours used to render the board.
 
-examples/goban.png
+![Go game replay](https://raw.githubusercontent.com/cnrowley/ha-AlgorithmArt/refs/heads/main/docs/images/goban.png)
 
 By default, the renderer uses **red stones for one side** instead of the
 traditional white stones. This improves contrast and readability on the
 PhotoPainter's color e-paper display. Traditional black-and-white stones can
 be selected through the generator options if preferred.
 
-The included SGF library allows the display to slowly replay notable games,
-turning the PhotoPainter into both an artwork display and a conversation
-piece for Go enthusiasts.
+A library of SGF files are distributed with the repository, or a game can be chosen at random.
 
----
 
 ## Architecture
 
@@ -233,6 +222,7 @@ sidecar logs, per request:
   `display_height`, plus the device's raw response body when it rejects an
   image — the fastest way to tell a dimension mismatch apart from a format
   problem.
+- The Photopainter does a full 
 
 ---
 
