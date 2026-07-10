@@ -491,7 +491,7 @@ func drawCaptureGrids(
     spacing := stoneDiameter + 4
 
     // ---------- LEFT AREA ----------
-    leftWidth := offsetX - r - 2
+    leftWidth := offsetX - r - 6
     if leftWidth > spacing {
         cols := leftWidth / spacing
         rows := boardPx / spacing
@@ -523,7 +523,7 @@ func drawCaptureGrids(
 
     // ---------- RIGHT AREA ----------
     rightStart := offsetX + boardPx
-    rightWidth := imgW - rightStart - r - 2
+    rightWidth := imgW - rightStart - r - 6
 
     if rightWidth > spacing {
         cols := rightWidth / spacing
