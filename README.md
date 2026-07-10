@@ -5,6 +5,58 @@ e-paper "PhotoPainter" frame — with built-in generative art (diffusion-limited
 aggregation, fractal zoom) and a Go (board game) SGF replay generator.
 
 ---
+---
+
+## Examples
+
+AlgorithmArt is designed to generate visually interesting content for the
+**PhotoPainter S3 7-color ACeP e-paper display** from Home Assistant. The
+generated images can be displayed manually, on a schedule, or as part of a
+Home Assistant automation.
+
+### Diffusion-Limited Aggregation (DLA)
+
+[DLA](https://en.wikipedia.org/wiki/Diffusion-d_aggregation is a
+classic growth model in which particles perform random walks and stick when
+they touch an existing structure. The resulting patterns resemble coral,
+lightning, roots, snowflakes, and other natural branching forms.
+
+![Diffes/dla.png
+
+The DLA generator maintains state between updates, allowing a Home Assistant
+automation or the built-in scheduler to grow the artwork over time and turn
+the display into a continuously evolving piece of generative art.
+
+### Mandelbrot Fractal Zoom
+
+The fractal generator renders the
+[Mandelbrot set](https://en.wikipedia.org/wiki/Mandelbrot_set), one of the
+best-known exampleseeper
+into the set, intricate self-similar structures emerge at every scale.
+
+!Mandelbrot fractal example
+
+AlgorithmArt adapts the rendering to the PhotoPainter's 7-color e-paper
+palette, producing detailed mathematical artwork optimized for the display.
+
+### Go (Board Game) Replay
+
+https://en.wikipedia.org/wiki/Go_(game) is a classic abstract strategy
+board game played for more than 2,500 years. AlgorithmArt can replay games
+from standard SGF files, advancing move-by-move with each update.
+
+examples/goban.png
+
+By default, the renderer uses **red stones for one side** instead of the
+traditional white stones. This improves contrast and readability on the
+PhotoPainter's color e-paper display. Traditional black-and-white stones can
+be selected through the generator options if preferred.
+
+The included SGF library allows the display to slowly replay notable games,
+turning the PhotoPainter into both an artwork display and a conversation
+piece for Go enthusiasts.
+
+---
 
 ## Architecture
 
