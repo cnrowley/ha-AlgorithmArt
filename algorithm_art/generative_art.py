@@ -778,7 +778,7 @@ class GobanWhiteStoneColourSelect(_ArtParamMixin, CoordinatorEntity, SelectEntit
     """White stone colour (goban.x -white-color)."""
 
     _param_key     = "goban_white_color"
-    _default_value = "green"
+    _default_value = "red"
     _attr_options  = GOBAN_WHITE_STONE_COLOURS
     _attr_icon     = "mdi:circle-outline"
 
@@ -949,7 +949,7 @@ class GenerateArtButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
                 "goban_move":           state.get("goban_move", 0),
                 "goban_bg":             state.get("goban_bg", "white"),
                 "goban_board":          state.get("goban_board", "yellow"),
-                "goban_white_color":    state.get("goban_white_color", "green"),
+                "goban_white_color":    state.get("goban_white_color", "red"),
                 "goban_black_color":    state.get("goban_black_color", "black"),
                 "goban_grid_thickness": state.get("goban_grid_thickness", "1"),
                 "goban_highlight":      state.get("goban_highlight", "ring"),
@@ -1098,7 +1098,7 @@ class GenerateArtButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
                 move           = state.get("goban_move",        0),
                 bg             = state.get("goban_bg",          "white"),
                 board          = state.get("goban_board",       "yellow"),
-                white_color    = state.get("goban_white_color", "green"),
+                white_color    = state.get("goban_white_color", "red"),
                 black_color    = state.get("goban_black_color", "black"),
                 grid_thickness = int(state.get("goban_grid_thickness", "1")),
                 highlight      = state.get("goban_highlight",   "ring"),
