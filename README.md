@@ -1,10 +1,9 @@
 # AlgorithmArt
 
-Home Assistant integration and companion add-on for driving a 7-color ACeP
-e-paper "PhotoPainter" frame — with built-in generative art (diffusion-limited
-aggregation, fractal zoom) and a Go (board game) SGF replay generator.
-
----
+[Home Assistant](https://www.home-assistant.io/) integration and companion add-on for driving the [Waveshare ESP32-S3-PhotoPainter](https://www.waveshare.com/esp32-s3-photopainter.htm)
+— with built-in generative art (diffusion-limited
+aggregation, fractal zoom) and a Go (board game) SGF replay generator. This generates images on a Home Assistant server and pushes them to the Photopainter device.
+This App runs as a separate Docker image with a web interface on the Home Assistant server
 ---
 
 ## Examples
@@ -13,6 +12,7 @@ AlgorithmArt is designed to generate visually interesting content for the
 **PhotoPainter S3 7-color ACeP e-paper display** from Home Assistant. The
 generated images can be displayed manually, on a schedule, or as part of a
 Home Assistant automation.
+[[https://www.waveshare.com/esp32-s3-photopainter.htm]]
 
 ### Diffusion-Limited Aggregation (DLA)
 
