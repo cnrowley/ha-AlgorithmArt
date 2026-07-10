@@ -25,7 +25,7 @@ const (
     H         = 480
     NumLayers = 5
 
-    WalkersPerFrame = 1200
+    WalkersPerFrame = 600
     MaxSteps        = 6000
 
     // Visual thickening only; does not affect growth.
