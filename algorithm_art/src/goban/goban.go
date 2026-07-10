@@ -66,7 +66,7 @@ func main() {
 
     bgColor := flag.String("bg", "white", "white|black")
     boardColor := flag.String("board", "yellow", "yellow|white")
-    whiteColor := flag.String("white-color", "green", "white|green|blue|red")
+    whiteColor := flag.String("white-color", "red", "white|green|blue|red")
     blackColor := flag.String("black-color", "black", "black|red")
 
     gridThickness := flag.Int("grid-thickness", 1, "1 or 2")
@@ -478,9 +478,6 @@ func render(
 
     return img
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// CAPTURE GRIDS
 func drawCaptureGrids(
     img *image.RGBA,
     b Board,
@@ -490,8 +487,11 @@ func drawCaptureGrids(
     stoneDiameter := 2 * r
     spacing := stoneDiameter + 4
 
+    // Extra whitespace between the main board and captured-stone areas.
+    captureGap := 24
+
     // ---------- LEFT AREA ----------
-    leftWidth := offsetX - r - 6
+    leftWidth := offsetX - captureGap - r - 6
     if leftWidth > spacing {
         cols := leftWidth / spacing
         rows := boardPx / spacing
@@ -506,7 +506,7 @@ func drawCaptureGrids(
             col := i / rows
             row := i % rows
 
-            x := offsetX - r - col*spacing
+            x := offsetX - captureGap - r - col*spacing
             y := offsetY + r + row*spacing
 
             circle(img, x, y, r, whiteCol)
@@ -523,7 +523,7 @@ func drawCaptureGrids(
 
     // ---------- RIGHT AREA ----------
     rightStart := offsetX + boardPx
-    rightWidth := imgW - rightStart - r - 6
+    rightWidth := imgW - rightStart - captureGap - r - 6
 
     if rightWidth > spacing {
         cols := rightWidth / spacing
@@ -539,7 +539,7 @@ func drawCaptureGrids(
             col := i / rows
             row := i % rows
 
-            x := rightStart + r + col*spacing
+            x := rightStart + captureGap + r + col*spacing
             y := offsetY + r + row*spacing
 
             circle(img, x, y, r, blackCol)
