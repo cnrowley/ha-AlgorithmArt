@@ -186,7 +186,7 @@ schedule pushes from HA than use the add-on's built-in scheduler.
 
 ## Development
 
-The generator binaries are plain Go programs under `src/`; the Dockerfile
+The home assistant and web UI scripts are all Python, but the code to generate the images are Go binaries `src/`; the Dockerfile
 builds them with `go build` and copies them into the sidecar image. To
 iterate locally without rebuilding the container:
 
@@ -222,7 +222,7 @@ sidecar logs, per request:
   `display_height`, plus the device's raw response body when it rejects an
   image — the fastest way to tell a dimension mismatch apart from a format
   problem.
-- The Photopainter does a full 
+- The Photopainter does a full refresh where the screen will flash for about 30 seconds when the image is updated, so I personally set the refresh frequency to 30 minutes or an hour. You can control the refresh frequency number of frames to advance through the UI.
 
 ---
 
