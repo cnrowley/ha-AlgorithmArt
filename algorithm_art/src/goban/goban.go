@@ -488,7 +488,9 @@ func drawCaptureGrids(
     spacing := stoneDiameter + 4
 
     // Extra whitespace between the main board and captured-stone areas.
-    captureGap := 24
+    // (Previously 24px, which read as visually cramped against the board
+    // edge — bumped up for more breathing room.)
+    captureGap := 32
 
     // ---------- LEFT AREA ----------
     leftWidth := offsetX - captureGap - r - 6
