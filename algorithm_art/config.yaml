@@ -24,7 +24,7 @@ options:
   dla_cmd: "dla.x"
   fractal_cmd: "fractal.x"
   goban_cmd: "goban.x"
-  moire_cmd: "moire"
+  moire_cmd: "moire.x"
   display_width: 800
   display_height: 480
 
