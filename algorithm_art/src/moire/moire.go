@@ -1,553 +1,601 @@
 package main
 
 import (
-    "flag"
-    "fmt"
-    "image"
-    "image/color"
-    "math"
-    "math/rand"
-    "os"
-    "time"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"image"
+	"image/color"
+	"math"
+	"os"
+	"strings"
 
-    "golang.org/x/image/bmp"
+	"golang.org/x/image/bmp"
+)
+
+type ColorName string
+
+const (
+	ColorWhite  ColorName = "white"
+	ColorBlack  ColorName = "black"
+	ColorRed    ColorName = "red"
+	ColorGreen  ColorName = "green"
+	ColorBlue   ColorName = "blue"
+	ColorYellow ColorName = "yellow"
 )
 
 type Pattern string
 
 const (
-    Lines        Pattern = "lines"
-    Square       Pattern = "square"
-    HexDots      Pattern = "hexdots"
-    Honeycomb    Pattern = "honeycomb"
-    Triangular   Pattern = "triangular"
-    Kagome       Pattern = "kagome"
-    Circles      Pattern = "circles"
-    Spokes       Pattern = "spokes"
-    Checkerboard Pattern = "checkerboard"
+	PatternHoneycomb    Pattern = "honeycomb"
+	PatternHexDots      Pattern = "hexdots"
+	PatternLines        Pattern = "lines"
+	PatternSquare       Pattern = "square"
+	PatternTriangular   Pattern = "triangular"
+	PatternKagome       Pattern = "kagome"
+	PatternCircles      Pattern = "circles"
+	PatternSpokes       Pattern = "spokes"
+	PatternCheckerboard Pattern = "checkerboard"
 )
 
+type State struct {
+	Iteration int     `json:"iteration"`
+	Rotation  float64 `json:"rotation_deg"`
+	TX        float64 `json:"tx"`
+	TY        float64 `json:"ty"`
+	Scale     float64 `json:"scale"`
+	Pattern   string  `json:"pattern"`
+}
+
 type Config struct {
-    Width    int
-    Height   int
-    Pattern  Pattern
-    Rotation float64
-    TX       float64
-    TY       float64
-    Output   string
+	Pattern    Pattern
+	Width      int
+	Height     int
+	Rotation   float64
+	TX         float64
+	TY         float64
+	Scale      float64
+	Background ColorName
+	LineColor  ColorName
+	Output     string
+	Animate    bool
+	Iteration  int
+	StatePath  string
 }
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+}
 
-    rand.Seed(time.Now().UnixNano())
+func run() error {
+	cfg := parseFlags()
 
-    cfg := parseFlags()
+	if err := validateConfig(cfg); err != nil {
+		return err
+	}
 
-    img := image.NewRGBA(
-        image.Rect(0, 0, cfg.Width, cfg.Height),
-    )
+	if cfg.Animate {
+		i := float64(cfg.Iteration)
+		cfg.Rotation = 1.2 + 0.015*i
+		cfg.TX = 3 * math.Sin(i/20)
+		cfg.TY = 3 * math.Cos(i/23)
+		cfg.Scale = math.Pow(1.00015, i)
+	}
 
-    fillWhite(img)
+	img := image.NewRGBA(image.Rect(0, 0, cfg.Width, cfg.Height))
+	fill(img, toRGBA(cfg.Background))
 
-    switch cfg.Pattern {
+	line := toRGBA(cfg.LineColor)
 
-    case Lines:
-        drawLines(img, cfg)
+	switch cfg.Pattern {
+	case PatternHoneycomb:
+		drawHoneycomb(img, cfg, line)
+	case PatternHexDots:
+		drawHexDots(img, cfg, line)
+	case PatternLines:
+		drawLines(img, cfg, line)
+	case PatternSquare:
+		drawSquare(img, cfg, line)
+	case PatternTriangular:
+		drawTriangular(img, cfg, line)
+	case PatternKagome:
+		drawKagome(img, cfg, line)
+	case PatternCircles:
+		drawCircles(img, cfg, line)
+	case PatternSpokes:
+		drawSpokes(img, cfg, line)
+	case PatternCheckerboard:
+		drawCheckerboard(img, cfg, line)
+	default:
+		return fmt.Errorf("unsupported pattern %q", cfg.Pattern)
+	}
 
-    case Square:
-        drawSquare(img, cfg)
+	if err := writeBMP(cfg.Output, img); err != nil {
+		return err
+	}
 
-    case HexDots:
-        drawHexDots(img, cfg)
+	state := State{
+		Iteration: cfg.Iteration,
+		Rotation:  cfg.Rotation,
+		TX:        cfg.TX,
+		TY:        cfg.TY,
+		Scale:     cfg.Scale,
+		Pattern:   string(cfg.Pattern),
+	}
 
-    case Honeycomb:
-        drawHoneycomb(img, cfg)
+	if err := writeState(cfg.StatePath, state); err != nil {
+		return err
+	}
 
-    case Triangular:
-        drawTriangular(img, cfg)
+	fmt.Printf("Pattern: %s\n", cfg.Pattern)
+	fmt.Printf("Output: %s\n", cfg.Output)
+	fmt.Printf("State: %s\n", cfg.StatePath)
+	fmt.Printf("Iteration: %d\n", cfg.Iteration)
 
-    case Kagome:
-        drawKagome(img, cfg)
-
-    case Circles:
-        drawCircles(img, cfg)
-
-    case Spokes:
-        drawSpokes(img, cfg)
-
-    case Checkerboard:
-        drawCheckerboard(img, cfg)
-
-    default:
-        drawHexDots(img, cfg)
-    }
-
-    f, err := os.Create(cfg.Output)
-    if err != nil {
-        panic(err)
-    }
-    defer f.Close()
-
-    if err := bmp.Encode(f, img); err != nil {
-        panic(err)
-    }
-
-    fmt.Println("Wrote:", cfg.Output)
+	return nil
 }
 
 func parseFlags() Config {
+	cfg := Config{}
 
-    cfg := Config{}
+	pattern := flag.String("pattern", string(PatternHoneycomb), "pattern: honeycomb, hexdots, lines, square, triangular, kagome, circles, spokes, checkerboard")
+	background := flag.String("background", string(ColorWhite), "background color: white, black, red, green, blue, yellow")
+	linecolor := flag.String("linecolor", string(ColorBlack), "line color: white, black, red, green, blue, yellow")
 
-    flag.IntVar(&cfg.Width,
-        "width",
-        800,
-        "image width")
+	flag.IntVar(&cfg.Width, "width", 800, "image width in pixels")
+	flag.IntVar(&cfg.Height, "height", 480, "image height in pixels")
+	flag.Float64Var(&cfg.Rotation, "rotation", 1.2, "overlay rotation in degrees")
+	flag.Float64Var(&cfg.TX, "tx", 5, "overlay translation x in pixels")
+	flag.Float64Var(&cfg.TY, "ty", 0, "overlay translation y in pixels")
+	flag.Float64Var(&cfg.Scale, "scale", 1.0, "overlay scale")
+	flag.StringVar(&cfg.Output, "output", "current.bmp", "output BMP path")
+	flag.BoolVar(&cfg.Animate, "animate", false, "enable deterministic animation mode")
+	flag.IntVar(&cfg.Iteration, "iteration", 0, "animation iteration")
+	flag.StringVar(&cfg.StatePath, "state", "moire_state.json", "output JSON state path")
 
-    flag.IntVar(&cfg.Height,
-        "height",
-        480,
-        "image height")
+	flag.Parse()
 
-    pattern := flag.String(
-        "pattern",
-        "hexdots",
-        "pattern")
+	cfg.Pattern = Pattern(strings.ToLower(strings.TrimSpace(*pattern)))
+	cfg.Background = ColorName(strings.ToLower(strings.TrimSpace(*background)))
+	cfg.LineColor = ColorName(strings.ToLower(strings.TrimSpace(*linecolor)))
 
-    flag.Float64Var(
-        &cfg.Rotation,
-        "rotation",
-        2.0,
-        "rotation degrees")
-
-    flag.Float64Var(
-        &cfg.TX,
-        "tx",
-        10,
-        "translation x")
-
-    flag.Float64Var(
-        &cfg.TY,
-        "ty",
-        10,
-        "translation y")
-
-    flag.StringVar(
-        &cfg.Output,
-        "output",
-        "current.bmp",
-        "output bmp")
-
-    flag.Parse()
-
-    cfg.Pattern = Pattern(*pattern)
-
-    return cfg
+	return cfg
 }
 
-func fillWhite(img *image.RGBA) {
-
-    white := color.RGBA{255, 255, 255, 255}
-
-    b := img.Bounds()
-
-    for y := b.Min.Y; y < b.Max.Y; y++ {
-        for x := b.Min.X; x < b.Max.X; x++ {
-            img.SetRGBA(x, y, white)
-        }
-    }
+func validateConfig(cfg Config) error {
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return fmt.Errorf("dimensions must be positive, got width=%d height=%d", cfg.Width, cfg.Height)
+	}
+	if cfg.Width > 20000 || cfg.Height > 20000 {
+		return fmt.Errorf("dimensions are too large, got width=%d height=%d", cfg.Width, cfg.Height)
+	}
+	if !validPattern(cfg.Pattern) {
+		return fmt.Errorf("invalid pattern %q", cfg.Pattern)
+	}
+	if !validColor(cfg.Background) {
+		return fmt.Errorf("invalid background color %q", cfg.Background)
+	}
+	if !validColor(cfg.LineColor) {
+		return fmt.Errorf("invalid line color %q", cfg.LineColor)
+	}
+	if cfg.Scale <= 0 || math.IsNaN(cfg.Scale) || math.IsInf(cfg.Scale, 0) {
+		return fmt.Errorf("scale must be a finite positive number, got %g", cfg.Scale)
+	}
+	if math.IsNaN(cfg.Rotation) || math.IsInf(cfg.Rotation, 0) {
+		return fmt.Errorf("rotation must be finite, got %g", cfg.Rotation)
+	}
+	if math.IsNaN(cfg.TX) || math.IsInf(cfg.TX, 0) || math.IsNaN(cfg.TY) || math.IsInf(cfg.TY, 0) {
+		return fmt.Errorf("translation must be finite, got tx=%g ty=%g", cfg.TX, cfg.TY)
+	}
+	if strings.TrimSpace(cfg.Output) == "" {
+		return errors.New("output path must not be empty")
+	}
+	if strings.TrimSpace(cfg.StatePath) == "" {
+		return errors.New("state path must not be empty")
+	}
+	return nil
 }
 
-func transform(
-    x,
-    y,
-    rotDeg,
-    tx,
-    ty float64,
-) (float64, float64) {
-
-    t := rotDeg * math.Pi / 180
-
-    c := math.Cos(t)
-    s := math.Sin(t)
-
-    xx := c*x - s*y + tx
-    yy := s*x + c*y + ty
-
-    return xx, yy
+func validPattern(p Pattern) bool {
+	switch p {
+	case PatternHoneycomb, PatternHexDots, PatternLines, PatternSquare, PatternTriangular, PatternKagome, PatternCircles, PatternSpokes, PatternCheckerboard:
+		return true
+	default:
+		return false
+	}
 }
 
-func plot(
-    img *image.RGBA,
-    x,
-    y int,
-) {
-
-    if x < 0 || y < 0 ||
-        x >= img.Bounds().Dx() ||
-        y >= img.Bounds().Dy() {
-        return
-    }
-
-    img.SetRGBA(
-        x,
-        y,
-        color.RGBA{0, 0, 0, 255},
-    )
+func validColor(c ColorName) bool {
+	switch c {
+	case ColorWhite, ColorBlack, ColorRed, ColorGreen, ColorBlue, ColorYellow:
+		return true
+	default:
+		return false
+	}
 }
 
-func drawLine(
-    img *image.RGBA,
-    x0,
-    y0,
-    x1,
-    y1 int,
-) {
-
-    dx := int(math.Abs(float64(x1 - x0)))
-    dy := -int(math.Abs(float64(y1 - y0)))
-
-    sx := -1
-    if x0 < x1 {
-        sx = 1
-    }
-
-    sy := -1
-    if y0 < y1 {
-        sy = 1
-    }
-
-    err := dx + dy
-
-    for {
-
-        plot(img, x0, y0)
-
-        if x0 == x1 && y0 == y1 {
-            break
-        }
-
-        e2 := 2 * err
-
-        if e2 >= dy {
-            err += dy
-            x0 += sx
-        }
-
-        if e2 <= dx {
-            err += dx
-            y0 += sy
-        }
-    }
+func toRGBA(name ColorName) color.RGBA {
+	switch name {
+	case ColorWhite:
+		return color.RGBA{R: 255, G: 255, B: 255, A: 255}
+	case ColorBlack:
+		return color.RGBA{R: 0, G: 0, B: 0, A: 255}
+	case ColorRed:
+		return color.RGBA{R: 255, G: 0, B: 0, A: 255}
+	case ColorGreen:
+		return color.RGBA{R: 0, G: 170, B: 0, A: 255}
+	case ColorBlue:
+		return color.RGBA{R: 0, G: 0, B: 255, A: 255}
+	case ColorYellow:
+		return color.RGBA{R: 255, G: 255, B: 0, A: 255}
+	default:
+		return color.RGBA{R: 0, G: 0, B: 0, A: 255}
+	}
 }
 
-func drawSegmentPair(
-    img *image.RGBA,
-    cfg Config,
-    x1,
-    y1,
-    x2,
-    y2 float64,
-) {
-
-    w2 := float64(cfg.Width) / 2
-    h2 := float64(cfg.Height) / 2
-
-    drawLine(
-        img,
-        int(x1+w2),
-        int(y1+h2),
-        int(x2+w2),
-        int(y2+h2),
-    )
-
-    tx1, ty1 := transform(
-        x1, y1,
-        cfg.Rotation,
-        cfg.TX,
-        cfg.TY)
-
-    tx2, ty2 := transform(
-        x2, y2,
-        cfg.Rotation,
-        cfg.TX,
-        cfg.TY)
-
-    drawLine(
-        img,
-        int(tx1+w2),
-        int(ty1+h2),
-        int(tx2+w2),
-        int(ty2+h2),
-    )
+func fill(img *image.RGBA, col color.RGBA) {
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			img.SetRGBA(x, y, col)
+		}
+	}
 }
 
-func drawLines(img *image.RGBA, cfg Config) {
+func writeBMP(path string, img image.Image) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create BMP %q: %w", path, err)
+	}
+	defer func() {
+		_ = f.Close()
+	}()
 
-    spacing := 20
+	if err := bmp.Encode(f, img); err != nil {
+		return fmt.Errorf("encode BMP %q: %w", path, err)
+	}
 
-    for x := -cfg.Width; x < 2*cfg.Width; x += spacing {
-
-        drawSegmentPair(
-            img, cfg,
-            float64(x), -float64(cfg.Height),
-            float64(x), 2*float64(cfg.Height),
-        )
-    }
+	return nil
 }
 
-func drawSquare(img *image.RGBA, cfg Config) {
+func writeState(path string, state State) error {
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal state: %w", err)
+	}
+	data = append(data, '\n')
 
-    spacing := 30
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write state %q: %w", path, err)
+	}
 
-    for x := -cfg.Width; x < 2*cfg.Width; x += spacing {
-
-        drawSegmentPair(
-            img, cfg,
-            float64(x), -float64(cfg.Height),
-            float64(x), 2*float64(cfg.Height))
-    }
-
-    for y := -cfg.Height; y < 2*cfg.Height; y += spacing {
-
-        drawSegmentPair(
-            img, cfg,
-            -float64(cfg.Width), float64(y),
-            2*float64(cfg.Width), float64(y))
-    }
+	return nil
 }
 
-func drawHexDots(img *image.RGBA, cfg Config) {
+func transform(x, y, rotDeg, tx, ty, scale float64) (float64, float64) {
+	x *= scale
+	y *= scale
 
-    spacing := 25.0
+	t := rotDeg * math.Pi / 180
+	c := math.Cos(t)
+	s := math.Sin(t)
 
-    dy := math.Sqrt(3) * spacing / 2
+	xx := c*x - s*y + tx
+	yy := s*x + c*y + ty
 
-    row := 0
-
-    for y := -float64(cfg.Height); y < 2*float64(cfg.Height); y += dy {
-
-        shift := 0.0
-        if row%2 == 1 {
-            shift = spacing / 2
-        }
-
-        for x := -float64(cfg.Width); x < 2*float64(cfg.Width); x += spacing {
-
-            plot(
-                img,
-                int(x+shift)+cfg.Width/2,
-                int(y)+cfg.Height/2)
-
-            xx, yy := transform(
-                x+shift,
-                y,
-                cfg.Rotation,
-                cfg.TX,
-                cfg.TY)
-
-            plot(
-                img,
-                int(xx)+cfg.Width/2,
-                int(yy)+cfg.Height/2)
-        }
-
-        row++
-    }
+	return xx, yy
 }
 
-func drawHoneycomb(img *image.RGBA, cfg Config) {
+func plotThick(img *image.RGBA, x, y, radius int, col color.RGBA) {
+	if radius < 0 {
+		return
+	}
 
-    numCellsX := 30.0
+	b := img.Bounds()
+	rr := radius * radius
 
-    bond := float64(cfg.Width) /
-        (numCellsX * math.Sqrt(3))
-
-    sqrt3 := math.Sqrt(3)
-
-    a1x := sqrt3 * bond
-    a1y := 0.0
-
-    a2x := sqrt3 * bond / 2
-    a2y := 1.5 * bond
-
-    dirs := [][2]float64{
-        {0, bond},
-        {-sqrt3 * bond / 2, -bond / 2},
-        {sqrt3 * bond / 2, -bond / 2},
-    }
-
-    N := 80
-
-    for i := -N; i < N; i++ {
-
-        for j := -N; j < N; j++ {
-
-            ax := float64(i)*a1x +
-                float64(j)*a2x
-
-            ay := float64(i)*a1y +
-                float64(j)*a2y
-
-            for _, d := range dirs {
-
-                drawSegmentPair(
-                    img,
-                    cfg,
-                    ax,
-                    ay,
-                    ax+d[0],
-                    ay+d[1],
-                )
-            }
-        }
-    }
+	for dy := -radius; dy <= radius; dy++ {
+		for dx := -radius; dx <= radius; dx++ {
+			if dx*dx+dy*dy > rr {
+				continue
+			}
+			px := x + dx
+			py := y + dy
+			if px >= b.Min.X && px < b.Max.X && py >= b.Min.Y && py < b.Max.Y {
+				img.SetRGBA(px, py, col)
+			}
+		}
+	}
 }
 
-func drawTriangular(img *image.RGBA, cfg Config) {
+func drawLine(img *image.RGBA, x0, y0, x1, y1 int, radius int, col color.RGBA) {
+	dx := absInt(x1 - x0)
+	dy := -absInt(y1 - y0)
 
-    s := 25.0
-    h := math.Sqrt(3) * s / 2
+	sx := -1
+	if x0 < x1 {
+		sx = 1
+	}
 
-    for row := -30; row < 60; row++ {
+	sy := -1
+	if y0 < y1 {
+		sy = 1
+	}
 
-        shift := 0.0
+	err := dx + dy
 
-        if row%2 != 0 {
-            shift = s / 2
-        }
+	for {
+		plotThick(img, x0, y0, radius, col)
 
-        for col := -40; col < 80; col++ {
+		if x0 == x1 && y0 == y1 {
+			return
+		}
 
-            x := float64(col)*s + shift
-            y := float64(row) * h
+		e2 := 2 * err
 
-            drawSegmentPair(img, cfg, x, y, x+s, y)
-            drawSegmentPair(img, cfg, x, y, x+s/2, y+h)
-            drawSegmentPair(img, cfg, x+s, y, x+s/2, y+h)
-        }
-    }
+		if e2 >= dy {
+			err += dy
+			x0 += sx
+		}
+
+		if e2 <= dx {
+			err += dx
+			y0 += sy
+		}
+	}
 }
 
-func drawKagome(img *image.RGBA, cfg Config) {
-
-    s := 30.0
-    h := math.Sqrt(3) * s / 2
-
-    for row := -30; row < 60; row++ {
-
-        shift := 0.0
-
-        if row%2 != 0 {
-            shift = s / 2
-        }
-
-        for col := -40; col < 80; col++ {
-
-            x := float64(col)*s + shift
-            y := float64(row) * h
-
-            drawSegmentPair(
-                img, cfg,
-                x, y,
-                x+s/2, y)
-
-            drawSegmentPair(
-                img, cfg,
-                x+s/2, y,
-                x+s/4, y+h/2)
-
-            drawSegmentPair(
-                img, cfg,
-                x+s/4, y+h/2,
-                x, y)
-        }
-    }
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
-func drawCircles(img *image.RGBA, cfg Config) {
-
-    cx := float64(cfg.Width) / 2
-    cy := float64(cfg.Height) / 2
-
-    for r := 20.0; r < 800; r += 20 {
-
-        for th := 0.0; th < 2*math.Pi; th += 0.01 {
-
-            x := cx + r*math.Cos(th)
-            y := cy + r*math.Sin(th)
-
-            plot(img, int(x), int(y))
-
-            xx, yy := transform(
-                x-cx,
-                y-cy,
-                cfg.Rotation,
-                cfg.TX,
-                cfg.TY)
-
-            plot(
-                img,
-                int(xx+cx),
-                int(yy+cy))
-        }
-    }
+func round(v float64) int {
+	return int(math.Round(v))
 }
 
-func drawSpokes(img *image.RGBA, cfg Config) {
+func drawSegment(img *image.RGBA, cfg Config, x1, y1, x2, y2 float64, radius int, col color.RGBA, transformed bool) {
+	if transformed {
+		x1, y1 = transform(x1, y1, cfg.Rotation, cfg.TX, cfg.TY, cfg.Scale)
+		x2, y2 = transform(x2, y2, cfg.Rotation, cfg.TX, cfg.TY, cfg.Scale)
+	}
 
-    R := 800.0
+	cx := float64(cfg.Width) / 2
+	cy := float64(cfg.Height) / 2
 
-    for k := 0; k < 60; k++ {
-
-        t := 2 * math.Pi * float64(k) / 60
-
-        drawSegmentPair(
-            img,
-            cfg,
-            0,
-            0,
-            R*math.Cos(t),
-            R*math.Sin(t),
-        )
-    }
+	drawLine(img, round(x1+cx), round(y1+cy), round(x2+cx), round(y2+cy), radius, col)
 }
 
-func drawCheckerboard(img *image.RGBA, cfg Config) {
-
-    cell := 25
-
-    for y := -cfg.Height; y < cfg.Height; y += cell {
-
-        for x := -cfg.Width; x < cfg.Width; x += cell {
-
-            if ((x/cell)+(y/cell))%2 != 0 {
-                continue
-            }
-
-            for yy := y; yy < y+cell; yy++ {
-
-                for xx := x; xx < x+cell; xx++ {
-
-                    plot(
-                        img,
-                        xx+cfg.Width/2,
-                        yy+cfg.Height/2)
-
-                    rx, ry := transform(
-                        float64(xx),
-                        float64(yy),
-                        cfg.Rotation,
-                        cfg.TX,
-                        cfg.TY)
-
-                    plot(
-                        img,
-                        int(rx)+cfg.Width/2,
-                        int(ry)+cfg.Height/2)
-                }
-            }
-        }
-    }
+func drawSegmentPair(img *image.RGBA, cfg Config, x1, y1, x2, y2 float64, radius int, col color.RGBA) {
+	drawSegment(img, cfg, x1, y1, x2, y2, radius, col, false)
+	drawSegment(img, cfg, x1, y1, x2, y2, radius, col, true)
 }
 
+func drawPoint(img *image.RGBA, cfg Config, x, y float64, radius int, col color.RGBA, transformed bool) {
+	if transformed {
+		x, y = transform(x, y, cfg.Rotation, cfg.TX, cfg.TY, cfg.Scale)
+	}
+
+	cx := float64(cfg.Width) / 2
+	cy := float64(cfg.Height) / 2
+
+	plotThick(img, round(x+cx), round(y+cy), radius, col)
+}
+
+func drawPointPair(img *image.RGBA, cfg Config, x, y float64, radius int, col color.RGBA) {
+	drawPoint(img, cfg, x, y, radius, col, false)
+	drawPoint(img, cfg, x, y, radius, col, true)
+}
+
+func coverageRadius(cfg Config) float64 {
+	return math.Hypot(float64(cfg.Width), float64(cfg.Height))*0.75 + 200
+}
+
+func drawLines(img *image.RGBA, cfg Config, col color.RGBA) {
+	spacing := 40.0
+	r := coverageRadius(cfg)
+
+	for x := -r; x <= r; x += spacing {
+		drawSegmentPair(img, cfg, x, -r, x, r, 2, col)
+	}
+}
+
+func drawSquare(img *image.RGBA, cfg Config, col color.RGBA) {
+	spacing := 50.0
+	r := coverageRadius(cfg)
+
+	for x := -r; x <= r; x += spacing {
+		drawSegmentPair(img, cfg, x, -r, x, r, 2, col)
+	}
+	for y := -r; y <= r; y += spacing {
+		drawSegmentPair(img, cfg, -r, y, r, y, 2, col)
+	}
+}
+
+func drawHexDots(img *image.RGBA, cfg Config, col color.RGBA) {
+	spacing := 40.0
+	rowH := math.Sqrt(3) * spacing / 2
+	r := coverageRadius(cfg)
+
+	row := 0
+	for y := -r; y <= r; y += rowH {
+		shift := 0.0
+		if row%2 != 0 {
+			shift = spacing / 2
+		}
+		for x := -r; x <= r; x += spacing {
+			drawPointPair(img, cfg, x+shift, y, 3, col)
+		}
+		row++
+	}
+}
+
+func drawHoneycomb(img *image.RGBA, cfg Config, col color.RGBA) {
+	cellsAcross := 20.0
+	bond := float64(cfg.Width) / (cellsAcross * math.Sqrt(3))
+	sqrt3 := math.Sqrt(3)
+
+	a1x := sqrt3 * bond
+	a1y := 0.0
+	a2x := sqrt3 * bond / 2
+	a2y := 1.5 * bond
+
+	neighbors := [][2]float64{
+		{0, bond},
+		{-sqrt3 * bond / 2, -bond / 2},
+		{sqrt3 * bond / 2, -bond / 2},
+	}
+
+	r := coverageRadius(cfg)
+	n := int(math.Ceil(r/bond)) + 8
+
+	for i := -n; i <= n; i++ {
+		for j := -n; j <= n; j++ {
+			ax := float64(i)*a1x + float64(j)*a2x
+			ay := float64(i)*a1y + float64(j)*a2y
+
+			if math.Abs(ax) > r+2*bond || math.Abs(ay) > r+2*bond {
+				continue
+			}
+
+			for _, d := range neighbors {
+				drawSegmentPair(img, cfg, ax, ay, ax+d[0], ay+d[1], 2, col)
+			}
+		}
+	}
+}
+
+func drawTriangular(img *image.RGBA, cfg Config, col color.RGBA) {
+	s := 40.0
+	h := math.Sqrt(3) * s / 2
+	r := coverageRadius(cfg)
+
+	rows := int(math.Ceil(2*r/h)) + 4
+	cols := int(math.Ceil(2*r/s)) + 4
+
+	for row := -rows; row <= rows; row++ {
+		y := float64(row) * h
+		shift := 0.0
+		if row%2 != 0 {
+			shift = s / 2
+		}
+
+		for colIdx := -cols; colIdx <= cols; colIdx++ {
+			x := float64(colIdx)*s + shift
+			drawSegmentPair(img, cfg, x, y, x+s, y, 2, col)
+			drawSegmentPair(img, cfg, x, y, x+s/2, y+h, 2, col)
+			drawSegmentPair(img, cfg, x+s, y, x+s/2, y+h, 2, col)
+		}
+	}
+}
+
+func drawKagome(img *image.RGBA, cfg Config, col color.RGBA) {
+	s := 45.0
+	sqrt3 := math.Sqrt(3)
+
+	a1x := s
+	a1y := 0.0
+	a2x := s / 2
+	a2y := sqrt3 * s / 2
+
+	p0 := [2]float64{0, 0}
+	p1 := [2]float64{s / 2, 0}
+	p2 := [2]float64{s / 4, sqrt3 * s / 4}
+
+	r := coverageRadius(cfg)
+	n := int(math.Ceil(r/s)) + 10
+
+	for i := -n; i <= n; i++ {
+		for j := -n; j <= n; j++ {
+			ox := float64(i)*a1x + float64(j)*a2x
+			oy := float64(i)*a1y + float64(j)*a2y
+
+			if math.Abs(ox) > r+2*s || math.Abs(oy) > r+2*s {
+				continue
+			}
+
+			cell := [][2][2]float64{
+				{{ox + p0[0], oy + p0[1]}, {ox + p1[0], oy + p1[1]}},
+				{{ox + p1[0], oy + p1[1]}, {ox + p2[0], oy + p2[1]}},
+				{{ox + p2[0], oy + p2[1]}, {ox + p0[0], oy + p0[1]}},
+				{{ox + p1[0], oy + p1[1]}, {ox + s + p0[0], oy + p0[1]}},
+				{{ox + p2[0], oy + p2[1]}, {ox + a2x + p0[0], oy + a2y + p0[1]}},
+				{{ox + p2[0], oy + p2[1]}, {ox + a2x - s/2 + p1[0], oy + a2y + p1[1]}},
+			}
+
+			for _, seg := range cell {
+				drawSegmentPair(img, cfg, seg[0][0], seg[0][1], seg[1][0], seg[1][1], 2, col)
+			}
+		}
+	}
+}
+
+func drawCircles(img *image.RGBA, cfg Config, col color.RGBA) {
+	spacing := 28.0
+	maxR := coverageRadius(cfg)
+	step := 0.012
+
+	for r := spacing; r <= maxR; r += spacing {
+		prevX := r
+		prevY := 0.0
+
+		for th := step; th <= 2*math.Pi+step; th += step {
+			x := r * math.Cos(th)
+			y := r * math.Sin(th)
+
+			drawSegmentPair(img, cfg, prevX, prevY, x, y, 2, col)
+
+			prevX = x
+			prevY = y
+		}
+	}
+}
+
+func drawSpokes(img *image.RGBA, cfg Config, col color.RGBA) {
+	count := 96
+	r := coverageRadius(cfg)
+
+	for k := 0; k < count; k++ {
+		t := 2 * math.Pi * float64(k) / float64(count)
+		drawSegmentPair(img, cfg, 0, 0, r*math.Cos(t), r*math.Sin(t), 2, col)
+	}
+}
+
+func drawCheckerboard(img *image.RGBA, cfg Config, col color.RGBA) {
+	cell := 40.0
+	r := coverageRadius(cfg)
+
+	for y := -r; y < r; y += cell {
+		for x := -r; x < r; x += cell {
+			ix := int(math.Floor(x / cell))
+			iy := int(math.Floor(y / cell))
+			if (ix+iy)&1 == 0 {
+				fillSquare(img, cfg, x, y, cell, col, false)
+				fillSquare(img, cfg, x, y, cell, col, true)
+			}
+		}
+	}
+}
+
+func fillSquare(img *image.RGBA, cfg Config, x, y, size float64, col color.RGBA, transformed bool) {
+	step := 1.0
+	cx := float64(cfg.Width) / 2
+	cy := float64(cfg.Height) / 2
+
+	for yy := y; yy < y+size; yy += step {
+		for xx := x; xx < x+size; xx += step {
+			px := xx
+			py := yy
+			if transformed {
+				px, py = transform(px, py, cfg.Rotation, cfg.TX, cfg.TY, cfg.Scale)
+			}
+			plotThick(img, round(px+cx), round(py+cy), 0, col)
+		}
+	}
+}
