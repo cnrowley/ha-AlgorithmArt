@@ -14,7 +14,7 @@ COPY src/fractal/ ./
 RUN go build -o /out/fractal.x .
 
 WORKDIR /build/moire
-COPY src/moirel/ ./
+COPY src/moire/ ./
 RUN go build -o /out/moire.x .
 
 
