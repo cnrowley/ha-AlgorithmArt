@@ -13,6 +13,11 @@ WORKDIR /build/fractal
 COPY src/fractal/ ./
 RUN go build -o /out/fractal.x .
 
+WORKDIR /build/moire
+COPY src/moirel/ ./
+RUN go build -o /out/moire.x .
+
+
 WORKDIR /build/goban
 COPY src/goban/ ./
 RUN go mod download && go build -o /out/goban.x .
@@ -33,11 +38,7 @@ RUN pip3 install --no-cache-dir --break-system-packages flask requests
 COPY --from=builder /out/dla.x        /usr/local/bin/dla.x
 COPY --from=builder /out/fractal.x /usr/local/bin/fractal.x
 COPY --from=builder /out/goban.x      /usr/local/bin/goban.x
-
-# moire is an external, standalone renderer (not built from source in this
-# repo). Drop the prebuilt executable for your target arch(es) at
-# bin/moire/moire.x before building the image — see bin/moire/README.md.
-COPY bin/moire/moire.x /usr/local/bin/moire.x
+COPY --from=builder /out/moire.x      /usr/local/bin/moire.x
 
 RUN chmod +x \
     /usr/local/bin/dla.x \
