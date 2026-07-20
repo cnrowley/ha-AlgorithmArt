@@ -57,6 +57,10 @@ DEFAULT_STATE: dict[str, Any] = {
     "goban_grid_thickness": 1,
     "goban_highlight":   "ring",
     "goban_mode":        "random",      # random | sequential | manual
+    # Moire options
+    "moire_pattern":     "honeycomb",
+    "moire_background":  "white",
+    "moire_linecolor":   "black",
 }
 
 

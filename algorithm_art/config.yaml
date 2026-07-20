@@ -1,5 +1,5 @@
 name: "AlgorithmArt Generator"
-description: "Runs DLA, Fractal, and Goban art generators for the PhotopainterArt integration."
+description: "Runs DLA, Fractal, Goban, and Moire art generators for the PhotopainterArt integration."
 version: "1.0.0"
 slug: "algorithm_art"
 init: false
@@ -24,6 +24,7 @@ options:
   dla_cmd: "dla.x"
   fractal_cmd: "fractal.x"
   goban_cmd: "goban.x"
+  moire_cmd: "moire"
   display_width: 800
   display_height: 480
 
@@ -33,5 +34,6 @@ schema:
   dla_cmd: str
   fractal_cmd: str
   goban_cmd: str
+  moire_cmd: str
   display_width: int
   display_height: int

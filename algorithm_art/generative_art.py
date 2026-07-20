@@ -44,6 +44,19 @@ Texts
   * SGF download URL            used when source = url
   * SGF paste text              used when source = inline
 
+── Moire ─────────────────────────────────────────────────────────────────────
+Selects
+  * Pattern                     honeycomb / hexdots / lines / square /
+                                 triangular / kagome / circles / spokes /
+                                 checkerboard
+  * Background colour           white / black / red / green / blue / yellow
+  * Line colour                 same list
+Sensors
+  * Moire next iteration        read-only; the -iteration value moire will
+                                 render next (counts up indefinitely)
+Buttons
+  * Moire reset sequence        resets the iteration counter back to 0
+
 ── Camera / image source (source = "camera") ──────────────────────────────────
 Selects
   * Camera/image entity         which HA camera or image entity to push
@@ -94,12 +107,16 @@ from .art_generator import (
     GOBAN_WHITE_STONE_COLOURS,
     GOBAN_BLACK_STONE_COLOURS,
     GOBAN_HIGHLIGHT_MODES,
+    MOIRE_PATTERNS,
+    MOIRE_COLOURS,
     DLAParams,
     FractalParams,
     GobanParams,
+    MoireParams,
     generate_dla,
     generate_fractal,
     generate_goban,
+    generate_moire,
 )
 from .const import (
     DOMAIN,
@@ -116,7 +133,8 @@ _LOGGER = logging.getLogger(__name__)
 ART_TYPE_DLA        = "dla"
 ART_TYPE_FRACTAL = "fractal"
 ART_TYPE_GOBAN      = "goban"
-ART_TYPES           = [ART_TYPE_DLA, ART_TYPE_FRACTAL, ART_TYPE_GOBAN]
+ART_TYPE_MOIRE      = "moire"
+ART_TYPES           = [ART_TYPE_DLA, ART_TYPE_FRACTAL, ART_TYPE_GOBAN, ART_TYPE_MOIRE]
 
 FRACTAL_MODES    = ["single", "zoom_sequence"]
 
@@ -191,6 +209,41 @@ def _fractal_manager(entry_id: str) -> FractalSequenceManager:
     return _FRACTAL_MANAGERS[entry_id]
 
 
+# ── Moire frame counter ─────────────────────────────────────────────────────
+
+class MoireSequenceManager:
+    """Tracks the monotonically increasing -iteration counter that drives
+    moire's ``-animate`` mode. Unlike DLA there is no upper bound — the
+    pattern just keeps evolving — so this simply counts up forever (until
+    reset), per the "Home Assistant should maintain a monotonically
+    increasing frame counter" integration guidance for moire.
+    """
+
+    def __init__(self) -> None:
+        self._iteration: int = 0
+
+    @property
+    def current_iteration(self) -> int:
+        return self._iteration
+
+    def next_iteration(self) -> int:
+        """Return the iteration to render now and advance the counter."""
+        iteration = self._iteration
+        self._iteration += 1
+        return iteration
+
+    def reset(self) -> None:
+        self._iteration = 0
+
+
+_MOIRE_MANAGERS: dict[str, MoireSequenceManager] = {}
+
+def _moire_manager(entry_id: str) -> MoireSequenceManager:
+    if entry_id not in _MOIRE_MANAGERS:
+        _MOIRE_MANAGERS[entry_id] = MoireSequenceManager()
+    return _MOIRE_MANAGERS[entry_id]
+
+
 # ── Platform setup ─────────────────────────────────────────────────────────────
 
 async def async_setup_entry(
@@ -202,6 +255,7 @@ async def async_setup_entry(
 
     _dla_manager(entry.entry_id)
     _fractal_manager(entry.entry_id)
+    _moire_manager(entry.entry_id)
 
     entities: list[Entity] = [
         # Primary picker — what kind of image source feeds the next display
@@ -237,6 +291,13 @@ async def async_setup_entry(
         GobanBlackStoneColourSelect(coordinator, entry, hass),
         GobanGridThicknessSelect(coordinator, entry, hass),
         GobanHighlightSelect(coordinator, entry, hass),
+
+        # Moire
+        MoirePatternSelect(coordinator, entry, hass),
+        MoireBackgroundSelect(coordinator, entry, hass),
+        MoireLineColourSelect(coordinator, entry, hass),
+        MoireIterationSensor(coordinator, entry, hass),
+        MoireResetButton(coordinator, entry, hass),
 
         # Generate & Display
         GenerateArtButton(coordinator, entry, hass),
@@ -874,6 +935,134 @@ class GobanHighlightSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
         self.async_write_ha_state()
 
 
+# ── Moire entities ───────────────────────────────────────────────────────────
+#
+# moire renders a single deterministic frame per -iteration value; HA's
+# MoireSequenceManager owns the monotonically increasing counter (per the
+# renderer's integration guidance) so the pattern keeps evolving frame over
+# frame without HA needing to compute rotation/translation/scale itself.
+
+class MoirePatternSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
+    """Which lattice pattern moire overlays on itself (-pattern)."""
+
+    _param_key     = "moire_pattern"
+    _default_value = "honeycomb"
+    _attr_options  = MOIRE_PATTERNS
+    _attr_icon     = "mdi:grid"
+
+    def __init__(self, coordinator, entry, hass):
+        super().__init__(coordinator)
+        self._entry = entry
+        self.hass   = hass
+        self._attr_unique_id   = f"{entry.entry_id}_moire_pattern"
+        self._attr_name        = "Moire pattern"
+        self._attr_device_info = coordinator.device_info
+
+    @property
+    def current_option(self) -> str:
+        return self._get()
+
+    async def async_select_option(self, option: str) -> None:
+        self._set(option)
+        self.async_write_ha_state()
+
+
+class MoireBackgroundSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
+    """Background colour (-background)."""
+
+    _param_key     = "moire_background"
+    _default_value = "white"
+    _attr_options  = MOIRE_COLOURS
+    _attr_icon     = "mdi:palette-outline"
+
+    def __init__(self, coordinator, entry, hass):
+        super().__init__(coordinator)
+        self._entry = entry
+        self.hass   = hass
+        self._attr_unique_id   = f"{entry.entry_id}_moire_background"
+        self._attr_name        = "Moire background colour"
+        self._attr_device_info = coordinator.device_info
+
+    @property
+    def current_option(self) -> str:
+        return self._get()
+
+    async def async_select_option(self, option: str) -> None:
+        self._set(option)
+        self.async_write_ha_state()
+
+
+class MoireLineColourSelect(_ArtParamMixin, CoordinatorEntity, SelectEntity):
+    """Line colour (-linecolor)."""
+
+    _param_key     = "moire_linecolor"
+    _default_value = "black"
+    _attr_options  = MOIRE_COLOURS
+    _attr_icon     = "mdi:palette"
+
+    def __init__(self, coordinator, entry, hass):
+        super().__init__(coordinator)
+        self._entry = entry
+        self.hass   = hass
+        self._attr_unique_id   = f"{entry.entry_id}_moire_linecolor"
+        self._attr_name        = "Moire line colour"
+        self._attr_device_info = coordinator.device_info
+
+    @property
+    def current_option(self) -> str:
+        return self._get()
+
+    async def async_select_option(self, option: str) -> None:
+        self._set(option)
+        self.async_write_ha_state()
+
+
+class MoireIterationSensor(_ArtParamMixin, CoordinatorEntity, SensorEntity):
+    """Read-only sensor: next -iteration value that will be rendered."""
+
+    _param_key        = ""
+    _default_value    = 0
+    _attr_icon        = "mdi:sine-wave"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "iteration"
+
+    def __init__(self, coordinator, entry, hass):
+        super().__init__(coordinator)
+        self._entry = entry
+        self.hass   = hass
+        self._attr_unique_id   = f"{entry.entry_id}_moire_iteration"
+        self._attr_name        = "Moire next iteration"
+        self._attr_device_info = coordinator.device_info
+
+    @property
+    def native_value(self) -> int:
+        return _moire_manager(self._entry.entry_id).current_iteration
+
+
+class MoireResetButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
+    """Reset the moire iteration counter back to 0, restarting the
+    evolving pattern from its starting rotation/translation/scale."""
+
+    _param_key     = ""
+    _default_value = None
+    _attr_icon     = "mdi:restart"
+
+    def __init__(self, coordinator, entry, hass):
+        super().__init__(coordinator)
+        self._entry = entry
+        self.hass   = hass
+        self._attr_unique_id   = f"{entry.entry_id}_moire_reset"
+        self._attr_name        = "Moire reset sequence"
+        self._attr_device_info = coordinator.device_info
+
+    async def async_press(self) -> None:
+        from .art_generator import reset_moire_sequence
+        await reset_moire_sequence()
+        _moire_manager(self._entry.entry_id).reset()
+        _LOGGER.info("Moire sequence reset to iteration 0")
+        self.hass.async_create_task(self.coordinator.async_request_refresh())
+
+
 # ── Generate & Display button ──────────────────────────────────────────────────
 
 class GenerateArtButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
@@ -953,6 +1142,15 @@ class GenerateArtButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
                 "goban_black_color":    state.get("goban_black_color", "black"),
                 "goban_grid_thickness": state.get("goban_grid_thickness", "1"),
                 "goban_highlight":      state.get("goban_highlight", "ring"),
+            })
+
+        elif art_type == ART_TYPE_MOIRE:
+            moire_mgr = _moire_manager(self._entry.entry_id)
+            attrs.update({
+                "moire_pattern":       state.get("moire_pattern",    "honeycomb"),
+                "moire_background":    state.get("moire_background", "white"),
+                "moire_linecolor":     state.get("moire_linecolor",  "black"),
+                "moire_next_iteration": moire_mgr.current_iteration,
             })
 
         return attrs
@@ -1102,6 +1300,17 @@ class GenerateArtButton(_ArtParamMixin, CoordinatorEntity, ButtonEntity):
                 black_color    = state.get("goban_black_color", "black"),
                 grid_thickness = int(state.get("goban_grid_thickness", "1")),
                 highlight      = state.get("goban_highlight",   "ring"),
+            ))
+
+        if art_type == ART_TYPE_MOIRE:
+            moire_mgr = _moire_manager(self._entry.entry_id)
+            iteration = moire_mgr.next_iteration()
+            _LOGGER.info("Moire: iteration %d", iteration)
+            return await generate_moire(MoireParams(
+                pattern    = state.get("moire_pattern",    "honeycomb"),
+                iteration  = iteration,
+                background = state.get("moire_background", "white"),
+                linecolor  = state.get("moire_linecolor",  "black"),
             ))
 
         _LOGGER.error("Unknown art type: %s", art_type)

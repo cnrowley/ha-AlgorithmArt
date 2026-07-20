@@ -45,7 +45,8 @@ ART_STATE_KEY = f"{DOMAIN}_art_params"
 ART_TYPE_DLA        = "dla"
 ART_TYPE_FRACTAL = "fractal"
 ART_TYPE_GOBAN      = "goban"
-ART_TYPES           = [ART_TYPE_DLA, ART_TYPE_FRACTAL, ART_TYPE_GOBAN]
+ART_TYPE_MOIRE      = "moire"
+ART_TYPES           = [ART_TYPE_DLA, ART_TYPE_FRACTAL, ART_TYPE_GOBAN, ART_TYPE_MOIRE]
 
 # Fractal colour options (must match the binary's colorMap)
 FRACTAL_COLOURS  = ["black", "white", "green", "blue", "red", "yellow", "orange"]
@@ -54,3 +55,11 @@ FRACTAL_MODES    = ["single", "zoom_sequence"]
 # Goban options (kept here for reference; entity modules import the
 # canonical lists directly from art_generator.py)
 GOBAN_SOURCES = ["library", "url", "inline"]
+
+# Moire options (kept here for reference; entity modules import the
+# canonical lists directly from art_generator.py)
+MOIRE_PATTERNS = [
+    "honeycomb", "hexdots", "lines", "square", "triangular",
+    "kagome", "circles", "spokes", "checkerboard",
+]
+MOIRE_COLOURS = ["white", "black", "red", "green", "blue", "yellow"]

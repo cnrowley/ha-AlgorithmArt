@@ -195,6 +195,13 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
       <div class="mc-stat" id="mc-goban-stat">- / -</div>
       <button class="btn bs mc-cfg" onclick="event.stopPropagation();openPage('goban')">Configure options &rarr;</button>
     </div>
+    <div class="method-card" id="mc-moire" onclick="selectMethod('moire')">
+      <div class="mc-top"><span class="mc-icon">&asymp;</span><span class="mc-title">Moire</span>
+        <span class="mc-badge">ACTIVE</span></div>
+      <div class="mc-sub">Evolving geometric interference pattern</div>
+      <div class="mc-stat" id="mc-moire-stat">iteration -</div>
+      <button class="btn bs mc-cfg" onclick="event.stopPropagation();openPage('moire')">Configure options &rarr;</button>
+    </div>
   </div>
 
   <div class="card">
@@ -239,6 +246,7 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
     <div class="st"><span class="sk">Active method</span><span class="sv" id="ss-gen">-</span></div>
     <div class="st"><span class="sk">DLA frame</span><span class="sv" id="ss-dlaframe">-</span></div>
     <div class="st"><span class="sk">Fractal zoom</span><span class="sv" id="ss-fzoom">-</span></div>
+    <div class="st"><span class="sk">Moire iteration</span><span class="sv" id="ss-moireiter">-</span></div>
     <div class="st"><span class="sk">Go game</span><span class="sv" id="ss-game">-</span></div>
     <div class="st"><span class="sk">Go move</span><span class="sv" id="ss-move">-</span></div>
     <div class="st"><span class="sk">Last push</span><span class="sv" id="ss-last">-</span></div>
@@ -433,6 +441,53 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
   </div>
 </section>
 
+<!-- ============================ MOIRE ============================ -->
+<section class="view" id="view-moire">
+  <div class="crumb"><a onclick="openPage('home')">&larr; Home</a> / Moire</div>
+  <div class="card">
+    <h2>Moire</h2>
+    <p class="hint">Options passed straight through to <code>moire</code>
+      (<code>-pattern</code>, <code>-background</code>, <code>-linecolor</code>).
+      Always invoked as <code>-animate -iteration N</code>; rotation, translation,
+      and scale are derived by the binary itself from the iteration number, which
+      Home Assistant advances by one on every generate.</p>
+    <div class="row" style="margin-bottom:16px">
+      <div class="field">
+        <label>Pattern (-pattern)</label>
+        <select id="moire-pattern" onchange="moireSave()">
+          <option value="honeycomb">Honeycomb</option>
+          <option value="hexdots">Hex dots</option>
+          <option value="lines">Lines</option>
+          <option value="square">Square</option>
+          <option value="triangular">Triangular</option>
+          <option value="kagome">Kagome</option>
+          <option value="circles">Circles</option>
+          <option value="spokes">Spokes</option>
+          <option value="checkerboard">Checkerboard</option>
+        </select>
+      </div>
+    </div>
+    <div class="field" style="margin-bottom:14px">
+      <label>Background colour (-background)</label>
+      <div class="swatches" id="moire-bg-sw"></div>
+      <input type="hidden" id="moire-background" value="white">
+    </div>
+    <div class="field" style="margin-bottom:14px">
+      <label>Line colour (-linecolor)</label>
+      <div class="swatches" id="moire-line-sw"></div>
+      <input type="hidden" id="moire-linecolor" value="black">
+    </div>
+    <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
+      <label style="margin:0">Next iteration</label>
+      <span id="moire-iter-lbl" style="font-size:12px;color:var(--mut)">0</span>
+    </div>
+    <div class="btn-row">
+      <button class="btn bs" onclick="moireReset()">Reset sequence</button>
+      <button class="btn bp" onclick="generateNow('moire')">Generate moire frame</button>
+    </div>
+  </div>
+</section>
+
 </div>
 
 <div id="toast"></div>
@@ -440,7 +495,8 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
 <script>
 // -- State --
 const COLOURS = ['black','white','green','blue','red','yellow','orange'];
-const PAGES = ['home','dla','fractal','goban'];
+const MOIRE_COLOURS = ['white','black','red','green','blue','yellow'];
+const PAGES = ['home','dla','fractal','goban','moire'];
 const S = {
   activeTab:   'dla',      // the currently selected *method* (scheduler target)
   fracFg:      'white',
@@ -454,6 +510,10 @@ const S = {
   gobanBlack:  'black',
   gobanGrid:   1,
   gobanHighlight: 'ring',
+  moirePattern: 'honeycomb',
+  moireBg:      'white',
+  moireLine:    'black',
+  moireIter:    0,
   games:       [],
   filtered:    [],
   currentId:   null,
@@ -499,6 +559,7 @@ function updateGenBar(){
     dla:    ['Generate DLA frame',    'Advances the DLA sequence one frame'],
     fractal:['Generate fractal',      'Renders fractal with current settings'],
     goban:  ['Generate Go frame',     'Advances the game one move'],
+    moire:  ['Generate moire frame',  'Advances the moire iteration by one'],
   };
   const [main,sub]=labels[S.activeTab]||['Generate',''];
   const lbl=document.getElementById('gen-label');
@@ -555,6 +616,12 @@ async function poll(){
     document.getElementById('frac-prog').style.width=Math.min(fz*5,95)+'%';
     document.getElementById('mc-fractal-stat').textContent='step '+fz;
 
+    // Moire
+    const mi=d.moire?.iteration||0;
+    S.moireIter=mi;
+    document.getElementById('mc-moire-stat').textContent='iteration '+mi;
+    document.getElementById('moire-iter-lbl').textContent=mi;
+
     // Goban
     const gs=d.goban||{};
     S.currentId=gs.current_game_id;
@@ -601,6 +668,9 @@ async function poll(){
     document.getElementById('goban-black').value=sch.goban_black_color||'black';
     document.getElementById('goban-grid').value=sch.goban_grid_thickness||1;
     document.getElementById('goban-highlight').value=sch.goban_highlight||'ring';
+    document.getElementById('moire-pattern').value=sch.moire_pattern||'honeycomb';
+    setSwatchSel('moire-bg-sw','moire-background', sch.moire_background||'white');
+    setSwatchSel('moire-line-sw','moire-linecolor', sch.moire_linecolor||'black');
 
     // Interval presets dropdown
     const sel=document.getElementById('sch-preset');
@@ -616,6 +686,7 @@ async function poll(){
     document.getElementById('ss-gen').textContent=S.activeTab||'-';
     document.getElementById('ss-dlaframe').textContent=`${dlaf} / 120`;
     document.getElementById('ss-fzoom').textContent='step '+fz;
+    document.getElementById('ss-moireiter').textContent=mi;
     document.getElementById('ss-game').textContent=gs.game_name||'-';
     document.getElementById('ss-move').textContent=
       `${gs.current_move||0} / ${gs.total_moves||0}`;
@@ -648,6 +719,10 @@ async function generateNow(methodOverride){
     payload.goban_black_color=document.getElementById('goban-black').value;
     payload.goban_grid_thickness=parseInt(document.getElementById('goban-grid').value)||1;
     payload.goban_highlight=document.getElementById('goban-highlight').value;
+  } else if(method==='moire'){
+    payload.moire_pattern=document.getElementById('moire-pattern').value;
+    payload.moire_background=document.getElementById('moire-background').value;
+    payload.moire_linecolor=document.getElementById('moire-linecolor').value;
   }
 
   try{
@@ -669,11 +744,11 @@ async function dlaReset(){
   toast('DLA sequence reset','ok'); poll();
 }
 
-// -- Fractal --
-function buildSwatches(cid, hid, selected){
+// -- Fractal / Moire --
+function buildSwatches(cid, hid, selected, palette){
   const c=document.getElementById(cid);
   c.innerHTML='';
-  COLOURS.forEach(col=>{
+  (palette||COLOURS).forEach(col=>{
     const d=document.createElement('div');
     d.className='sw '+col+(col===selected?' sel':'');
     d.title=col;
@@ -683,6 +758,8 @@ function buildSwatches(cid, hid, selected){
       document.getElementById(hid).value=col;
       if(hid==='frac-fg') S.fracFg=col;
       if(hid==='frac-bg') S.fracBg=col;
+      if(hid==='moire-background'){ S.moireBg=col; moireSave(); return; }
+      if(hid==='moire-linecolor'){ S.moireLine=col; moireSave(); return; }
       schedSave();
     };
     c.appendChild(d);
@@ -740,6 +817,18 @@ async function pickGame(id){
 }
 function gobanStyleSave(){ schedSave(); }
 
+// -- Moire --
+function moireSave(){
+  S.moirePattern=document.getElementById('moire-pattern').value;
+  schedSave();
+}
+async function moireReset(){
+  await fetch('/generate/moire/reset',{method:'POST'});
+  S.moireIter=0;
+  document.getElementById('moire-iter-lbl').textContent='0';
+  toast('Moire sequence reset','ok'); poll();
+}
+
 // -- Scheduler --
 function applyPreset(v){
   if(!v) return;
@@ -772,6 +861,9 @@ async function schedSave(extra={}){
     goban_grid_thickness: parseInt(document.getElementById('goban-grid').value)||1,
     goban_highlight:    document.getElementById('goban-highlight').value,
     goban_mode:         document.getElementById('goban-mode').value,
+    moire_pattern:      document.getElementById('moire-pattern').value,
+    moire_background:   document.getElementById('moire-background').value,
+    moire_linecolor:    document.getElementById('moire-linecolor').value,
     ...extra,
   };
   const r=await fetch('/scheduler/settings',{method:'POST',
@@ -835,6 +927,8 @@ function renderGames(){
 // -- Init --
 buildSwatches('fg-sw','frac-fg', S.fracFg);
 buildSwatches('bg-sw','frac-bg', S.fracBg);
+buildSwatches('moire-bg-sw','moire-background', S.moireBg, MOIRE_COLOURS);
+buildSwatches('moire-line-sw','moire-linecolor', S.moireLine, MOIRE_COLOURS);
 openPage((location.hash||'#/home').replace('#/',''));
 updateGenBar();
 checkHealth();
@@ -885,6 +979,14 @@ def ui_generate():
                 "black_color":    data.get("goban_black_color",   "black"),
                 "grid_thickness": data.get("goban_grid_thickness", 1),
                 "highlight":      data.get("goban_highlight",     "ring"),
+            }, timeout=180)
+        elif art_type == "moire":
+            gen_resp = rq.post(f"{base}/generate/moire", json={
+                "pattern":    data.get("moire_pattern",    "honeycomb"),
+                "background": data.get("moire_background", "white"),
+                "linecolor":  data.get("moire_linecolor",  "black"),
+                # No explicit "iteration" — let the sidecar auto-advance its
+                # own counter by one, same as a manual DLA generate does.
             }, timeout=180)
         else:
             return jsonify({"error": f"Unknown art_type: {art_type!r}"}), 400

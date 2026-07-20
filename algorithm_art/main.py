@@ -25,6 +25,15 @@ POST /goban/restart               {}
 POST /goban/skip                  {}
 POST /goban/move                  { "move": N }
 
+── Moire ──────────────────────────────────────────────────────────────────────
+POST /generate/moire              { "pattern", "iteration", "width", "height",
+                                     "background", "linecolor" }
+                                   Always invoked as `moire -animate -iteration N`;
+                                   rotation/translation/scale are derived by the
+                                   binary itself from the iteration number.
+POST /generate/moire/reset        {}  (clears the last moire_state.json — the
+                                        iteration counter itself lives in HA)
+
 ── Scheduler ──────────────────────────────────────────────────────────────────
 POST /scheduler/settings          { enabled, interval_seconds, frames_per_update,
                                     active_generator,
@@ -77,6 +86,7 @@ app.register_blueprint(ui_blueprint)
 DLA_CMD         = os.environ.get("DLA_CMD",         "dla.x")
 FRACTAL_CMD     = os.environ.get("FRACTAL_CMD",     "fractal.x")
 GOBAN_CMD       = os.environ.get("GOBAN_CMD",       "goban.x")
+MOIRE_CMD       = os.environ.get("MOIRE_CMD",       "moire")
 DEFAULT_WIDTH   = int(os.environ.get("DISPLAY_WIDTH",  "600"))
 DEFAULT_HEIGHT  = int(os.environ.get("DISPLAY_HEIGHT", "448"))
 PHOTOFRAME_HOST = os.environ.get("PHOTOFRAME_HOST", "photoframe.local")
@@ -84,6 +94,7 @@ STATE_DIR       = Path(os.environ.get("STATE_DIR",  "/data/state"))
 PORT            = int(os.environ.get("PORT", "8765"))
 
 FRACTAL_STATE_FILE = STATE_DIR / "fractal_state.json"
+MOIRE_STATE_FILE   = STATE_DIR / "moire_state.json"
 SGF_MAX_BYTES      = 2 * 1024 * 1024
 DLA_SEQUENCE_LENGTH = 120
 
@@ -92,6 +103,7 @@ _goban = GobanStateManager()
 
 _dla_next_frame    = 1
 _fractal_zoom_step = 0
+_moire_iteration   = 0
 _last_source       = "generative"
 _last_art_type     = "dla"
 
@@ -309,6 +321,18 @@ def _scheduler_generate(generator: str, state: dict) -> bytes | None:
                 "moves_per_frame": state.get("frames_per_update",   1),
             }, timeout=180)
 
+        elif generator == "moire":
+            # Advance by frames_per_update so the "frames per update" setting
+            # behaves the same way it does for the other generators, even
+            # though moire itself just takes a single -iteration value.
+            step = max(1, int(state.get("frames_per_update", 1) or 1))
+            resp = requests.post(f"{base}/generate/moire", json={
+                "pattern":    state.get("moire_pattern",    "honeycomb"),
+                "background": state.get("moire_background", "white"),
+                "linecolor":  state.get("moire_linecolor",  "black"),
+                "step":       step,
+            }, timeout=180)
+
         else:
             _LOGGER.error("Unknown generator: %s", generator)
             return None
@@ -342,6 +366,7 @@ def health():
             "dla":     _available(DLA_CMD),
             "fractal": _available(FRACTAL_CMD),
             "goban":   _available(GOBAN_CMD),
+            "moire":   _available(MOIRE_CMD),
         },
     })
 
@@ -371,6 +396,10 @@ def status():
             "zoom_step":    _fractal_zoom_step,
             "state_exists": FRACTAL_STATE_FILE.exists(),
         },
+        "moire": {
+            "iteration":    _moire_iteration,
+            "state_exists": MOIRE_STATE_FILE.exists(),
+        },
         "goban": {
             "selection_mode":  gs.get("selection_mode", "random"),
             "current_game_id": current_id,
@@ -397,6 +426,9 @@ def status():
             "goban_grid_thickness":  sch.get("goban_grid_thickness",  1),
             "goban_highlight":       sch.get("goban_highlight",       "ring"),
             "goban_mode":            sch.get("goban_mode",            "random"),
+            "moire_pattern":         sch.get("moire_pattern",         "honeycomb"),
+            "moire_background":      sch.get("moire_background",      "white"),
+            "moire_linecolor":       sch.get("moire_linecolor",       "black"),
         },
         "interval_presets": [{"label": l, "seconds": s} for l, s in INTERVAL_PRESETS],
     })
@@ -691,6 +723,122 @@ def fractal_reset():
     return jsonify({"status": "reset"})
 
 
+# ── Moire ─────────────────────────────────────────────────────────────────────
+#
+# moire is a standalone CLI renderer with no interactive prompts and fully
+# deterministic output for a given -iteration. All configuration (pattern,
+# colours, size) is stateless per call; only the iteration counter needs to
+# keep advancing so the moire pattern keeps evolving. When a caller (e.g.
+# HA's own MoireSequenceManager) already tracks the iteration itself it can
+# pass it explicitly; otherwise this endpoint auto-advances its own counter,
+# mirroring how /generate/dla behaves when no explicit frame is given.
+
+@app.post("/generate/moire")
+def generate_moire():
+    global _moire_iteration, _last_source, _last_art_type
+
+    if not _available(MOIRE_CMD):
+        return jsonify({"error": f"{MOIRE_CMD!r} not found"}), 503
+
+    data    = request.get_json(force=True) or {}
+    pattern = data.get("pattern", "honeycomb")
+    bg      = data.get("background", "white")
+    line    = data.get("linecolor",  "black")
+    width   = int(data.get("width",  DEFAULT_WIDTH)  or DEFAULT_WIDTH)
+    height  = int(data.get("height", DEFAULT_HEIGHT) or DEFAULT_HEIGHT)
+
+    raw = data.get("iteration", None)
+    if raw is not None:
+        try:
+            iteration = int(raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "iteration must be an integer"}), 400
+    else:
+        try:
+            step = max(1, int(data.get("step", 1) or 1))
+        except (TypeError, ValueError):
+            step = 1
+        iteration = _moire_iteration
+        _moire_iteration += step
+
+    out_dir  = tempfile.mkdtemp(prefix="moire_")
+    out_path = Path(out_dir)
+    bmp      = out_path / "current.bmp"
+    state    = out_path / "moire_state.json"
+
+    try:
+        argv = [
+            MOIRE_CMD,
+            "-animate",
+            "-iteration",  str(iteration),
+            "-pattern",    pattern,
+            "-width",      str(width),
+            "-height",     str(height),
+            "-background", bg,
+            "-linecolor",  line,
+            "-output",     str(bmp),
+            "-state",      str(state),
+        ]
+        result = _run(argv)
+        _LOGGER.debug(
+            "Moire stdout: %s\nMoire stderr: %s",
+            _truncate(result.stdout), _truncate(result.stderr),
+        )
+
+        if not bmp.exists() or bmp.stat().st_size == 0:
+            _LOGGER.error(
+                "Moire: expected %s after '%s' (exit %d) but it is %s",
+                bmp, " ".join(str(a) for a in argv), result.returncode,
+                "missing" if not bmp.exists() else "empty (0 bytes)",
+            )
+            _log_dir(out_path, "Moire")
+            return jsonify({
+                "error": "moire produced no output",
+                "detail": f"expected {bmp} (exit {result.returncode}); "
+                          f"see add-on log for stdout/stderr and directory listing",
+            }), 500
+
+        data_bytes = bmp.read_bytes()
+
+        # Persist the state file for debugging/inspection (best-effort —
+        # this is purely diagnostic, moire itself is fully deterministic
+        # from -iteration alone so losing this file changes nothing).
+        if state.exists():
+            try:
+                STATE_DIR.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(state, MOIRE_STATE_FILE)
+            except OSError as exc:
+                _LOGGER.warning("Moire: could not persist state file: %s", exc)
+
+        _last_source   = "generative"
+        _last_art_type = "moire"
+        _LOGGER.info(
+            "Moire: %d bytes  pattern=%s  iteration=%d  bg=%s  line=%s",
+            len(data_bytes), pattern, iteration, bg, line,
+        )
+        return Response(data_bytes, mimetype="image/bmp")
+
+    except RuntimeError as exc:
+        _LOGGER.error("Moire failed (iteration=%d): %s", iteration, exc)
+        _log_dir(out_path, "Moire")
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:
+        _LOGGER.error("Moire unexpected error (iteration=%d): %s", iteration, exc, exc_info=True)
+        _log_dir(out_path, "Moire")
+        return jsonify({"error": f"Unexpected error: {exc}"}), 500
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+
+
+@app.post("/generate/moire/reset")
+def moire_reset():
+    global _moire_iteration
+    _moire_iteration = 0
+    if MOIRE_STATE_FILE.exists():
+        MOIRE_STATE_FILE.unlink()
+    return jsonify({"status": "reset", "iteration": 0})
+
+
 # ── Goban ─────────────────────────────────────────────────────────────────────
 
 @app.get("/goban/games")
@@ -817,6 +965,7 @@ def scheduler_settings():
         "fractal_fg", "fractal_bg", "fractal_mode",
         "goban_bg", "goban_board", "goban_white_color", "goban_black_color",
         "goban_grid_thickness", "goban_highlight", "goban_mode",
+        "moire_pattern", "moire_background", "moire_linecolor",
     }
     updates = {k: v for k, v in data.items() if k in allowed}
 
@@ -922,15 +1071,15 @@ def push_to_device():
 # Bump this whenever a diagnostic/behavioral change is made, so the running
 # container's log makes it obvious which build is actually deployed instead
 # of having to infer it from which log lines are (or aren't) present.
-BUILD_MARKER = "2026-07-08.3-bmp-diagnostics+dla-persist+push-diagnostics"
+BUILD_MARKER = "2026-07-19.1-bmp-diagnostics+dla-persist+push-diagnostics+moire"
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     _LOGGER.info("AlgorithmArt build: %s", BUILD_MARKER)
     _LOGGER.info(
-        "AlgorithmArt starting on :%d  (dla=%s  fractal=%s  goban=%s  device=%s)",
-        PORT, DLA_CMD, FRACTAL_CMD, GOBAN_CMD, PHOTOFRAME_HOST,
+        "AlgorithmArt starting on :%d  (dla=%s  fractal=%s  goban=%s  moire=%s  device=%s)",
+        PORT, DLA_CMD, FRACTAL_CMD, GOBAN_CMD, MOIRE_CMD, PHOTOFRAME_HOST,
     )
     _LOGGER.info("SGF library: %d games loaded", len(_goban.games))
     _LOGGER.info("Web UI: http://localhost:%d/ui", PORT)

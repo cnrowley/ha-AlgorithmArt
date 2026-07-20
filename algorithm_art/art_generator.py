@@ -13,7 +13,10 @@ Sidecar API (default base URL http://localhost:8765):
                                   "sgf_text", "move", "bg", "board",
                                   "white_color", "black_color",
                                   "grid_thickness", "highlight" }
+    POST /generate/moire        { "pattern", "iteration", "background",
+                                  "linecolor", "width", "height" }
     POST /fractal/reset      {}
+    POST /generate/moire/reset  {}
     GET  /health
 
 The sidecar URL is read from the PHOTOPAINTER_SIDECAR_URL environment
@@ -55,6 +58,15 @@ GOBAN_HIGHLIGHT_MODES     = ["dot", "ring", "none"]
 # ── Fractal colour options ───────────────────────────────────────────────
 FRACTAL_COLOURS = ["black", "white", "green", "blue", "red", "yellow", "orange"]
 
+# ── Moire pattern / colour option lists ─────────────────────────────────────
+# (must match moire's supported -pattern and colour values)
+MOIRE_PATTERNS = [
+    "honeycomb", "hexdots", "lines", "square", "triangular",
+    "kagome", "circles", "spokes", "checkerboard",
+]
+MOIRE_RECOMMENDED_PATTERNS = ["honeycomb", "hexdots", "circles", "triangular"]
+MOIRE_COLOURS = ["white", "black", "red", "green", "blue", "yellow"]
+
 
 # ── Parameter dataclasses ───────────────────────────────────────────────────
 
@@ -81,6 +93,24 @@ class FractalParams:
     single:     bool = True
     frames:     int  = 1
     state_path: str  = ""    # non-empty = zoom sequence mode
+
+
+@dataclass
+class MoireParams:
+    """Parameters for moire.
+
+    moire always runs in ``-animate`` mode when driven from Home Assistant:
+    rotation/translation/scale are derived deterministically from
+    ``iteration`` by the binary itself, so HA only needs to track a
+    monotonically increasing frame counter and the cosmetic options
+    (pattern, colours, size).
+    """
+    pattern:    str = "honeycomb"
+    iteration:  int = 0
+    width:      int = DISPLAY_WIDTH
+    height:     int = DISPLAY_HEIGHT
+    background: str = "white"
+    linecolor:  str = "black"
 
 
 @dataclass
@@ -185,6 +215,37 @@ async def generate_goban(params: GobanParams) -> bytes:
         "grid_thickness": params.grid_thickness,
         "highlight":      params.highlight,
     })
+
+
+async def generate_moire(params: MoireParams) -> bytes:
+    """Generate a Moire animation frame via the sidecar and return BMP bytes."""
+    _LOGGER.info(
+        "Moire: pattern=%s iteration=%d bg=%s line=%s",
+        params.pattern, params.iteration, params.background, params.linecolor,
+    )
+    return await _post("/generate/moire", {
+        "pattern":    params.pattern,
+        "iteration":  params.iteration,
+        "width":      params.width,
+        "height":     params.height,
+        "background": params.background,
+        "linecolor":  params.linecolor,
+    })
+
+
+async def reset_moire_sequence() -> None:
+    """Tell the sidecar to forget its last Moire state file (cosmetic only —
+    the iteration counter itself lives in Home Assistant, see
+    generative_art.MoireSequenceManager)."""
+    url     = f"{SIDECAR_URL}/generate/moire/reset"
+    timeout = aiohttp.ClientTimeout(total=10)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url) as response:
+                body = await response.json()
+                _LOGGER.info("Moire reset: %s", body.get("status", "?"))
+    except Exception as exc:
+        _LOGGER.warning("Failed to reset moire state on sidecar: %s", exc)
 
 
 async def reset_fractal_zoom() -> None:

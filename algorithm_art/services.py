@@ -18,17 +18,22 @@ from .art_generator import (
     GOBAN_BLACK_STONE_COLOURS,
     GOBAN_GRID_THICKNESS,
     GOBAN_HIGHLIGHT_MODES,
+    MOIRE_PATTERNS,
+    MOIRE_COLOURS,
     DLAParams,
     FractalParams,
     GobanParams,
+    MoireParams,
     generate_dla,
     generate_fractal,
     generate_goban,
+    generate_moire,
 )
 from .const import (
     ART_TYPE_DLA,
     ART_TYPE_FRACTAL,
     ART_TYPE_GOBAN,
+    ART_TYPE_MOIRE,
     ART_TYPES,
     DOMAIN,
     GOBAN_SOURCES,
@@ -42,7 +47,7 @@ from .const import (
     SERVICE_ROTATE,
 )
 from .coordinator import PhotopainterArtCoordinator
-from .generative_art import _fractal_manager
+from .generative_art import _fractal_manager, _moire_manager
 from . import sgf_library
 
 _LOGGER = logging.getLogger(__name__)
@@ -85,6 +90,13 @@ SERVICE_GENERATE_ART_SCHEMA = vol.Schema(
         vol.Optional("goban_black_color",    default="black"):  vol.In(GOBAN_BLACK_STONE_COLOURS),
         vol.Optional("goban_grid_thickness", default=1):        vol.In(GOBAN_GRID_THICKNESS),
         vol.Optional("goban_highlight",      default="ring"):   vol.In(GOBAN_HIGHLIGHT_MODES),
+
+        # ── Moire ─────────────────────────────────────────────────────────────
+        vol.Optional("moire_pattern",    default="honeycomb"): vol.In(MOIRE_PATTERNS),
+        vol.Optional("moire_background", default="white"):     vol.In(MOIRE_COLOURS),
+        vol.Optional("moire_linecolor",  default="black"):     vol.In(MOIRE_COLOURS),
+        # Explicit iteration override; omit to let HA's own counter advance.
+        vol.Optional("moire_iteration"): vol.All(int, vol.Range(min=0)),
     }
 )
 
@@ -258,6 +270,21 @@ async def async_register_services(hass: HomeAssistant, coordinator: Photopainter
                 black_color    = data.get("goban_black_color", "black"),
                 grid_thickness = data.get("goban_grid_thickness", 1),
                 highlight      = data.get("goban_highlight", "ring"),
+            ))
+
+        if art_type == ART_TYPE_MOIRE:
+            explicit_iteration = data.get("moire_iteration")
+            if explicit_iteration is not None:
+                iteration = int(explicit_iteration)
+            else:
+                entry_id  = next(iter(hass.data.get(DOMAIN, {})), None)
+                iteration = _moire_manager(entry_id).next_iteration() if entry_id else 0
+            _LOGGER.info("Moire service: rendering iteration %d", iteration)
+            return await generate_moire(MoireParams(
+                pattern    = data.get("moire_pattern",    "honeycomb"),
+                iteration  = iteration,
+                background = data.get("moire_background", "white"),
+                linecolor  = data.get("moire_linecolor",  "black"),
             ))
 
         _LOGGER.error("Unknown art type: %s", art_type)
