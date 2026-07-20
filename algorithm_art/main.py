@@ -736,6 +736,7 @@ def fractal_reset():
 @app.post("/generate/moire")
 def generate_moire():
     global _moire_iteration, _last_source, _last_art_type
+    _LOGGER.info("MOIRE: " + str(MOIRE_CMD))
 
     if not _available(MOIRE_CMD):
         return jsonify({"error": f"{MOIRE_CMD!r} not found"}), 503
