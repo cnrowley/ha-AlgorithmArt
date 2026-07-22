@@ -21,6 +21,11 @@ RUN go build -o /out/moire.x .
 WORKDIR /build/goban
 COPY src/goban/ ./
 RUN go mod download && go build -o /out/goban.x .
+
+WORKDIR /build/chess
+COPY src/chess/ ./
+RUN go mod download && go build -o /out/chess2bmp.x .
+
 # ------------------------------------------------------------------
 # Runtime image
 # ------------------------------------------------------------------
