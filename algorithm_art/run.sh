@@ -33,8 +33,13 @@ PHOTOFRAME_HOST=$(bashio::config 'photoframe_host')
 export PHOTOFRAME_HOST
 export STATE_DIR="/data/state"
 export SGF_DIR="/data/go_sgf"
-export CHESS_PGN_DIR="/data/chess_pgn"
+export CHESS_PGN_DIR="/app/chess_pgn"
+# User-uploaded / URL-imported PGNs live under /data (the add-on's
+# persistent volume) so they survive container recreation, unlike /app
+# which is reset to the image contents on every restart/update.
+export CHESS_PGN_USER_DIR="/data/chess_pgn"
 
 mkdir -p /data/state
+mkdir -p /data/chess_pgn
 
 exec python3 /app/main.py

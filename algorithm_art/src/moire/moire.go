@@ -58,6 +58,7 @@ type Config struct {
 	TX         float64
 	TY         float64
 	Scale      float64
+	Density    float64
 	Background ColorName
 	LineColor  ColorName
 	Output     string
@@ -130,6 +131,7 @@ func parseFlags() Config {
 	flag.Float64Var(&cfg.TX, "tx", 5, "relative layer translation x in pixels")
 	flag.Float64Var(&cfg.TY, "ty", 0, "relative layer translation y in pixels")
 	flag.Float64Var(&cfg.Scale, "scale", 1.0, "relative layer scale")
+	flag.Float64Var(&cfg.Density, "density", 1.0, "pattern density multiplier: >1 = tighter/more repeats, <1 = sparser (range ~0.25-4)")
 	flag.StringVar(&cfg.Output, "output", "current.bmp", "output BMP path")
 	flag.BoolVar(&cfg.Animate, "animate", false, "enable deterministic animation mode")
 	flag.IntVar(&cfg.Iteration, "iteration", 0, "deterministic frame iteration")
@@ -159,6 +161,12 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.Scale <= 0 || math.IsNaN(cfg.Scale) || math.IsInf(cfg.Scale, 0) {
 		return fmt.Errorf("scale must be a finite positive number, got %g", cfg.Scale)
+	}
+	if cfg.Density <= 0 || math.IsNaN(cfg.Density) || math.IsInf(cfg.Density, 0) {
+		return fmt.Errorf("density must be a finite positive number, got %g", cfg.Density)
+	}
+	if cfg.Density < 0.1 || cfg.Density > 6 {
+		return fmt.Errorf("density out of supported range (0.1-6), got %g", cfg.Density)
 	}
 	if math.IsNaN(cfg.Rotation) || math.IsInf(cfg.Rotation, 0) {
 		return fmt.Errorf("rotation must be finite, got %g", cfg.Rotation)
@@ -418,7 +426,7 @@ func drawPattern(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA)
 }
 
 func drawLines(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) {
-	spacing := 40.0
+	spacing := 40.0 / cfg.Density
 	r := coverageRadius(cfg)
 	for x := -r; x <= r; x += spacing {
 		drawSegment(img, cfg, lt, x, -r, x, r, 2, col)
@@ -426,7 +434,7 @@ func drawLines(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) {
 }
 
 func drawSquare(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) {
-	spacing := 50.0
+	spacing := 50.0 / cfg.Density
 	r := coverageRadius(cfg)
 	for x := -r; x <= r; x += spacing {
 		drawSegment(img, cfg, lt, x, -r, x, r, 2, col)
@@ -437,7 +445,7 @@ func drawSquare(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) 
 }
 
 func drawHexDots(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) {
-	spacing := 40.0
+	spacing := 40.0 / cfg.Density
 	rowH := math.Sqrt(3) * spacing / 2
 	r := coverageRadius(cfg)
 	row := 0
@@ -454,7 +462,7 @@ func drawHexDots(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA)
 }
 
 func drawHoneycomb(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) {
-	cellsAcross := 20.0
+	cellsAcross := 20.0 * cfg.Density
 	bond := float64(cfg.Width) / (cellsAcross * math.Sqrt(3))
 	sqrt3 := math.Sqrt(3)
 	a1x, a1y := sqrt3*bond, 0.0
@@ -477,7 +485,7 @@ func drawHoneycomb(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGB
 }
 
 func drawTriangular(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) {
-	s := 40.0
+	s := 40.0 / cfg.Density
 	h := math.Sqrt(3) * s / 2
 	r := coverageRadius(cfg)
 	rows := int(math.Ceil(2*r/h)) + 4
@@ -498,7 +506,7 @@ func drawTriangular(img *image.RGBA, cfg Config, lt LayerTransform, col color.RG
 }
 
 func drawKagome(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) {
-	s := 45.0
+	s := 45.0 / cfg.Density
 	sqrt3 := math.Sqrt(3)
 	a1x, a1y := s, 0.0
 	a2x, a2y := s/2, sqrt3*s/2
@@ -530,7 +538,7 @@ func drawKagome(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) 
 }
 
 func drawCircles(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) {
-	spacing := 28.0
+	spacing := 28.0 / cfg.Density
 	maxR := coverageRadius(cfg)
 	step := 0.012
 	for r := spacing; r <= maxR; r += spacing {
@@ -545,7 +553,10 @@ func drawCircles(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA)
 }
 
 func drawSpokes(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) {
-	count := 96
+	count := int(96 * cfg.Density)
+	if count < 4 {
+		count = 4
+	}
 	r := coverageRadius(cfg)
 	for k := 0; k < count; k++ {
 		t := 2 * math.Pi * float64(k) / float64(count)
@@ -554,7 +565,7 @@ func drawSpokes(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) 
 }
 
 func drawCheckerboard(img *image.RGBA, cfg Config, lt LayerTransform, col color.RGBA) {
-	cell := 40.0
+	cell := 40.0 / cfg.Density
 	r := coverageRadius(cfg)
 	for y := -r; y < r; y += cell {
 		for x := -r; x < r; x += cell {

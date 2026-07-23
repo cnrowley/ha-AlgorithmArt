@@ -46,7 +46,15 @@ POST /generate/chess              { chess_source, game, plies_per_frame,
                                      show_player_names, show_result }
                                    Runs chess2bmp; see chess_state.py for the
                                    exit-code (0/1/2) handling this implements.
-GET  /chess/games                 list all games from pgn_directory.py
+GET  /chess/games                 list all games from the PGN library (scanned
+                                   live from both the bundled and user PGN
+                                   directories — see chess_state.py)
+POST /chess/rescan                {}  re-scan both PGN directories on disk
+POST /chess/upload                multipart/form-data, field "file" — upload
+                                   a .pgn (single- or multi-game) into the
+                                   user library
+POST /chess/import-url            { "url", "filename"? } — download a PGN
+                                   from a URL into the user library
 POST /chess/mode                  { "mode": "random"|"sequential"|"manual" }
 POST /chess/select                { "game_id": N }
 POST /chess/restart               {}
@@ -89,7 +97,10 @@ from flask import Flask, Response, jsonify, request
 sys.path.insert(0, "/app")
 
 from goban_state import GobanStateManager
-from chess_state import ChessStateManager, EXIT_OK, EXIT_BOUNDARY, EXIT_FATAL
+from chess_state import (
+    ChessStateManager, EXIT_OK, EXIT_BOUNDARY, EXIT_FATAL, save_user_pgn,
+    PGN_DIR as CHESS_PGN_DIR_PATH, USER_PGN_DIR as CHESS_PGN_USER_DIR_PATH,
+)
 from scheduler import Scheduler, INTERVAL_PRESETS
 from web_ui import ui as ui_blueprint
 
@@ -1104,6 +1115,86 @@ def chess_games():
     return jsonify(_chess.games)
 
 
+@app.post("/chess/rescan")
+def chess_rescan():
+    """Re-scan both PGN directories (bundled + user) without restarting
+    the add-on. Call this after manually dropping a .pgn file into
+    data/chess_pgn/ on disk, or just to pick up edits to an existing file."""
+    count = _chess.reload_games()
+    return jsonify({"status": "ok", "games": count})
+
+
+@app.post("/chess/upload")
+def chess_upload():
+    """Accept a PGN file uploaded from the browser (multipart/form-data,
+    field name 'file'), save it into the user PGN library, rescan, and
+    return the resulting library entries so the caller can immediately
+    show/select the new game(s) — handles multi-game files the same way
+    the on-disk scanner does.
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded (expected multipart field 'file')"}), 400
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    content = f.read()
+    if len(content) > SGF_MAX_BYTES:  # 2MB ceiling, same limit used for SGF uploads
+        return jsonify({"error": f"File too large (max {SGF_MAX_BYTES // 1024 // 1024}MB)"}), 400
+
+    try:
+        saved_path = save_user_pgn(f.filename, content)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except OSError as exc:
+        _LOGGER.error("Chess upload: failed to save %s: %s", f.filename, exc)
+        return jsonify({"error": f"Could not save file: {exc}"}), 500
+
+    count = _chess.reload_games()
+    new_games = [g for g in _chess.games if g["filename"] == saved_path.name]
+    _LOGGER.info("Chess upload: saved %s, library now has %d game(s)", saved_path.name, count)
+    return jsonify({"status": "ok", "filename": saved_path.name, "games": new_games, "total_games": count})
+
+
+@app.post("/chess/import-url")
+def chess_import_url():
+    """Download a PGN from a URL, save it into the user PGN library,
+    rescan, and return the resulting library entries. Distinct from
+    /generate/chess's chess_source="url" (which renders one ply of a
+    fetched PGN without saving it) — this permanently adds the game(s)
+    to the library so they show up in the game table and participate in
+    random/sequential rotation like any other library game.
+    """
+    data = request.get_json(force=True) or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "url is required"}), 400
+
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        return jsonify({"error": f"Could not fetch {url}: {exc}"}), 502
+
+    content = resp.content
+    if len(content) > SGF_MAX_BYTES:
+        return jsonify({"error": f"Downloaded file too large (max {SGF_MAX_BYTES // 1024 // 1024}MB)"}), 400
+
+    filename_hint = data.get("filename") or url.rsplit("/", 1)[-1] or "imported.pgn"
+    try:
+        saved_path = save_user_pgn(filename_hint, content)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except OSError as exc:
+        _LOGGER.error("Chess import-url: failed to save from %s: %s", url, exc)
+        return jsonify({"error": f"Could not save file: {exc}"}), 500
+
+    count = _chess.reload_games()
+    new_games = [g for g in _chess.games if g["filename"] == saved_path.name]
+    _LOGGER.info("Chess import-url: saved %s from %s, library now has %d game(s)", saved_path.name, url, count)
+    return jsonify({"status": "ok", "filename": saved_path.name, "games": new_games, "total_games": count})
+
+
 @app.post("/chess/mode")
 def chess_mode():
     data = request.get_json(force=True) or {}
@@ -1117,8 +1208,15 @@ def chess_mode():
 @app.post("/chess/select")
 def chess_select():
     data = request.get_json(force=True) or {}
+    raw_id = data.get("game_id")
+    if raw_id is None:
+        return jsonify({"error": "game_id is required"}), 400
     try:
-        game = _chess.select_game(int(data.get("game_id", 0)))
+        game_id = int(raw_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": f"game_id must be an integer, got {raw_id!r}"}), 400
+    try:
+        game = _chess.select_game(game_id)
         return jsonify({"status": "ok", "game": game})
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 404
@@ -1436,7 +1534,10 @@ if __name__ == "__main__":
         "Display: %dx%d (portrait=%s)", DEFAULT_WIDTH, DEFAULT_HEIGHT, DISPLAY_PORTRAIT,
     )
     _LOGGER.info("SGF library: %d games loaded", len(_goban.games))
-    _LOGGER.info("PGN library: %d games loaded", len(_chess.games))
+    _LOGGER.info(
+        "PGN library: %d games loaded (bundled=%s, user=%s)",
+        len(_chess.games), CHESS_PGN_DIR_PATH, CHESS_PGN_USER_DIR_PATH,
+    )
     _LOGGER.info("Web UI: http://localhost:%d/ui", PORT)
     _scheduler.start()
     app.run(host="0.0.0.0", port=PORT)

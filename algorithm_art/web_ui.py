@@ -620,13 +620,48 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
       <button class="btn bp" onclick="generateNow('chess')">Generate frame</button>
     </div>
 
+    <!-- Add games -->
+    <details style="margin-bottom:16px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--mut);padding:6px 0">
+        Add games to the library (upload &amp; import by URL)
+      </summary>
+      <div style="padding-top:12px;display:flex;flex-direction:column;gap:14px">
+        <p class="hint" style="margin:0">
+          A single .pgn file can contain multiple games — each is split out
+          into its own library entry automatically. Uploaded and
+          URL-imported files are saved under the add-on's persistent
+          storage, so they survive restarts and updates.
+        </p>
+        <div class="row">
+          <div class="field">
+            <label>Upload a .pgn file</label>
+            <div class="btn-row">
+              <input type="file" id="chess-upload-input" accept=".pgn,text/plain" style="flex:1">
+              <button class="btn bs" onclick="chessUploadFile()">Upload</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Import from a URL</label>
+            <div class="btn-row">
+              <input type="text" id="chess-url-input" placeholder="https://.../game.pgn" style="flex:1">
+              <button class="btn bs" onclick="chessImportUrl()">Import</button>
+            </div>
+          </div>
+        </div>
+        <div class="btn-row" style="justify-content:space-between;align-items:center">
+          <span id="chess-add-status" style="font-size:12px;color:var(--mut)"></span>
+          <button class="btn bs" onclick="chessRescanLibrary()">Rescan on-disk library</button>
+        </div>
+      </div>
+    </details>
+
     <!-- Game library -->
     <input class="tsearch" type="text" placeholder="Search games..."
       oninput="filterChessGames(this.value)">
     <div class="twrap">
       <table>
         <thead><tr>
-          <th>#</th><th>Event</th><th>White</th><th>Black</th><th>Result</th><th></th>
+          <th>#</th><th>Event</th><th>White</th><th>Black</th><th>Result</th><th>Src</th><th></th>
         </tr></thead>
         <tbody id="ctbody"></tbody>
       </table>
@@ -1070,6 +1105,72 @@ async function pickChessGame(id){
 }
 function chessStyleSave(){ schedSave(); }
 
+async function chessUploadFile(){
+  const inp=document.getElementById('chess-upload-input');
+  const statusEl=document.getElementById('chess-add-status');
+  if(!inp.files || !inp.files.length){ toast('Choose a .pgn file first','err'); return; }
+  const file=inp.files[0];
+  statusEl.textContent='Uploading '+file.name+'...';
+  const fd=new FormData();
+  fd.append('file', file);
+  try{
+    const r=await fetch('/chess/upload',{method:'POST', body:fd});
+    const d=await r.json();
+    if(r.ok){
+      const n=(d.games||[]).length;
+      statusEl.textContent=`Added ${n} game${n===1?'':'s'} from ${d.filename} (library: ${d.total_games} total)`;
+      toast('Uploaded '+file.name,'ok');
+      inp.value='';
+      await loadChessGames(); poll();
+    } else {
+      statusEl.textContent='';
+      toast('Upload failed: '+(d.error||'Unknown error'),'err');
+    }
+  }catch(e){
+    statusEl.textContent='';
+    toast('Upload failed: '+e.message,'err');
+  }
+}
+
+async function chessImportUrl(){
+  const inp=document.getElementById('chess-url-input');
+  const statusEl=document.getElementById('chess-add-status');
+  const url=inp.value.trim();
+  if(!url){ toast('Enter a URL first','err'); return; }
+  statusEl.textContent='Importing from '+url+'...';
+  try{
+    const r=await fetch('/chess/import-url',{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({url})});
+    const d=await r.json();
+    if(r.ok){
+      const n=(d.games||[]).length;
+      statusEl.textContent=`Added ${n} game${n===1?'':'s'} from ${d.filename} (library: ${d.total_games} total)`;
+      toast('Imported from URL','ok');
+      inp.value='';
+      await loadChessGames(); poll();
+    } else {
+      statusEl.textContent='';
+      toast('Import failed: '+(d.error||'Unknown error'),'err');
+    }
+  }catch(e){
+    statusEl.textContent='';
+    toast('Import failed: '+e.message,'err');
+  }
+}
+
+async function chessRescanLibrary(){
+  const statusEl=document.getElementById('chess-add-status');
+  try{
+    const r=await fetch('/chess/rescan',{method:'POST'});
+    const d=await r.json();
+    statusEl.textContent=`Library rescanned: ${d.games} game(s) found`;
+    toast('Library rescanned','ok');
+    await loadChessGames(); poll();
+  }catch(e){
+    toast('Rescan failed: '+e.message,'err');
+  }
+}
+
 // -- Scheduler --
 function applyPreset(v){
   if(!v) return;
@@ -1201,13 +1302,16 @@ function filterChessGames(q){
 function renderChessGames(){
   const tb=document.getElementById('ctbody');
   tb.innerHTML='';
-  S.chessFiltered.slice(0,200).forEach(g=>{
+  S.chessFiltered.slice(0,200).forEach((g,i)=>{
     const tr=document.createElement('tr');
     tr.dataset.id=g.id;
     if(g.id===S.chessCurrentId) tr.classList.add('curr');
+    const srcBadge = g.source==='user'
+      ? '<span style="font-size:9px;padding:1px 6px;border-radius:10px;background:var(--acc2);color:#fff">USER</span>'
+      : '<span style="font-size:9px;padding:1px 6px;border-radius:10px;background:var(--sur2);color:var(--mut);border:1px solid var(--brd)">LIB</span>';
     tr.innerHTML=`
-      <td style="color:var(--mut)">${g.id}</td>
-      <td title="${g.filename}"
+      <td style="color:var(--mut)">${i+1}</td>
+      <td title="${g.filename}${g.game_index>1?' (game '+g.game_index+')':''}"
           style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
         ${g.event||g.filename}</td>
       <td style="color:var(--mut);font-size:11px;max-width:110px;overflow:hidden;
@@ -1215,12 +1319,13 @@ function renderChessGames(){
       <td style="color:var(--mut);font-size:11px;max-width:110px;overflow:hidden;
           text-overflow:ellipsis;white-space:nowrap">${g.black||'-'}</td>
       <td style="color:var(--mut);font-size:11px">${g.result||'-'}</td>
+      <td>${srcBadge}</td>
       <td><button class="btn bs play-btn" onclick="pickChessGame(${g.id})">Play</button></td>`;
     tb.appendChild(tr);
   });
   if(S.chessFiltered.length>200){
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td colspan="6" style="color:var(--mut);text-align:center;padding:8px">
+    tr.innerHTML=`<td colspan="7" style="color:var(--mut);text-align:center;padding:8px">
       ...${S.chessFiltered.length-200} more - refine search</td>`;
     tb.appendChild(tr);
   }

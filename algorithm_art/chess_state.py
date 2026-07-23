@@ -15,7 +15,9 @@ Fractal, and Goban).
 Selection modes
 ----------------
 random      — pick a random game from the PGN library on each new game
-sequential  — cycle through games in id order
+sequential  — cycle through games in library order (bundled files first,
+              then user-added files, each sorted by filename then
+              in-file game index)
 manual      — stay on the game the user explicitly selected
 
 Game progression
@@ -44,18 +46,31 @@ import logging
 import os
 import random
 import re
+import zlib
 from pathlib import Path
 from typing import Any
 
 _LOGGER = logging.getLogger("algorithm_art.chess_state")
 
-# Where the PGN game library lives inside the container. Static assets
-# belong under /app so they are not hidden by HA's /data mount (same
-# reasoning as SGF_DIR in goban_state.py).
+# Where the *bundled* PGN game library lives inside the container (copied
+# in at image-build time by the Dockerfile — see data/chess_pgn/). Static
+# assets belong under /app so they are not hidden by HA's /data mount
+# (same reasoning as SGF_DIR in goban_state.py).
 PGN_DIR = Path(os.environ.get("CHESS_PGN_DIR", "/app/chess_pgn"))
 
+# Where *user*-added PGNs go — uploads via /chess/upload and imports via
+# /chess/import-url both land here. This is under /data (the add-on's
+# persistent volume) rather than /app, because anything written to /app
+# at runtime is lost the next time the container is recreated (add-on
+# restart/update); /data survives that.
+USER_PGN_DIR = Path(os.environ.get("CHESS_PGN_USER_DIR", "/data/chess_pgn"))
+
+# Both directories are scanned directly (see _scan_all) rather than
+# driven by a hand-maintained index file — drop a .pgn file in either
+# one (or POST it to /chess/upload / /chess/import-url) and it shows up
+# on the next scan, multi-game files included.
+
 STATE_FILE = Path("/data/state/chess_state.json")
-DIR_FILE = PGN_DIR / "pgn_directory.py"
 
 # Default number of plies to advance per Generate call when the caller
 # doesn't specify one. The scheduler's "frames per update" setting
@@ -127,37 +142,137 @@ def _count_plies(game_text: str) -> int:
     return plies
 
 
+def _stable_id(source: str, filename: str, game_index: int) -> int:
+    """Deterministic positive id for (source, filename, game_index).
+
+    Using a hash instead of a sequential position means a game's id does
+    NOT shift when other files are added/removed/renamed elsewhere in
+    the library — so a persisted ``current_game_id`` / ``manual_game_id``
+    in chess_state.json stays valid across rescans instead of silently
+    pointing at the wrong game (or a game that no longer exists at that
+    position), which is what produced "Game id N not found" errors
+    whenever the library contents changed between restarts. ``source``
+    is included so a user-uploaded file can't collide with a bundled one
+    that happens to share a filename.
+    """
+    h = zlib.crc32(f"{source}:{filename}:{game_index}".encode("utf-8"))
+    return h & 0x7FFFFFFF
+
+
+def _extract_tag(game_text: str, tag: str) -> str:
+    m = re.search(rf'\[{tag}\s+"([^"]*)"\]', game_text)
+    return m.group(1).strip() if m else ""
+
+
+def _scan_dir(dir_path: Path, source: str) -> list[dict]:
+    """Scan one directory for *.pgn files and split each into games.
+
+    A single file (e.g. ``chess.pgn``) may contain any number of games —
+    each becomes its own library entry with its own stable id, its own
+    ``game_index`` (1-based, matching chess2bmp's own ``-game`` flag),
+    and metadata read straight from that game's own PGN tags.
+    """
+    entries: list[dict] = []
+
+    if not dir_path.exists():
+        _LOGGER.info("PGN directory does not exist yet: %s", dir_path)
+        return entries
+
+    pgn_paths = sorted(dir_path.glob("*.pgn"))
+    _LOGGER.info("Scanning %s (%s): found %d .pgn file(s)", dir_path, source, len(pgn_paths))
+
+    for path in pgn_paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            _LOGGER.warning("Could not read %s: %s", path, exc)
+            continue
+
+        games_in_file = _split_pgn_games(text)
+        for idx, game_text in enumerate(games_in_file, start=1):
+            if not game_text.strip():
+                continue
+            entries.append({
+                "id":          _stable_id(source, path.name, idx),
+                "filename":    path.name,
+                "game_index":  idx,
+                "source":      source,          # "bundled" | "user"
+                "white":       _extract_tag(game_text, "White") or "?",
+                "black":       _extract_tag(game_text, "Black") or "?",
+                "event":       _extract_tag(game_text, "Event") or path.stem,
+                "date":        _extract_tag(game_text, "Date"),
+                "result":      _extract_tag(game_text, "Result") or "*",
+                "total_moves": max(1, _count_plies(game_text)),
+            })
+
+    return entries
+
+
+def _scan_all() -> list[dict]:
+    """Build the full game library by scanning both the bundled and the
+    user-added PGN directories. Re-run on startup and on every
+    ``/chess/rescan`` call — dropping a new .pgn file into either
+    directory (or editing an existing one) picks it up with no restart
+    and no hand-maintained index file required.
+    """
+    entries = _scan_dir(PGN_DIR, "bundled") + _scan_dir(USER_PGN_DIR, "user")
+    entries.sort(key=lambda g: (g["source"] != "user", g["filename"], g["game_index"]))
+    _LOGGER.info(
+        "PGN library: %d game(s) total (bundled dir=%s, user dir=%s)",
+        len(entries), PGN_DIR, USER_PGN_DIR,
+    )
+    return entries
+
+
 def _load_directory() -> list:
-    """Load PGN_FILES from pgn_directory.py via exec (same pattern used
-    by goban_state._load_directory for sgf_directory.py)."""
-    _LOGGER.info("Looking for PGN directory at: %s", PGN_DIR)
-    _LOGGER.info("PGN_DIR exists: %s", PGN_DIR.exists())
+    """Build the game library by scanning both PGN directories."""
+    return _scan_all()
 
-    if PGN_DIR.exists():
-        contents = list(PGN_DIR.iterdir())
-        _LOGGER.info(
-            "PGN_DIR contents (%d items): %s",
-            len(contents),
-            [p.name for p in contents[:10]],
-        )
 
-    if not DIR_FILE.exists():
-        _LOGGER.warning(
-            "pgn_directory.py not found at %s — "
-            "check that data/chess_pgn/ was copied correctly in the Dockerfile.",
-            DIR_FILE,
-        )
-        return []
+def _sanitize_pgn_filename(name: str) -> str:
+    """Turn an arbitrary filename/URL-derived name into a safe .pgn
+    filename with no path components."""
+    name = os.path.basename((name or "").strip().replace("\\", "/"))
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._") or "game"
+    if not name.lower().endswith(".pgn"):
+        name += ".pgn"
+    return name
 
-    namespace: dict[str, Any] = {}
-    try:
-        exec(DIR_FILE.read_text(encoding="utf-8"), namespace)  # noqa: S102
-        files = namespace.get("PGN_FILES", [])
-        _LOGGER.info("Loaded %d games from %s", len(files), DIR_FILE)
-        return files
-    except Exception as exc:
-        _LOGGER.error("Failed to exec pgn_directory.py: %s", exc)
-        return []
+
+def save_user_pgn(filename: str, content: bytes) -> Path:
+    """Save PGN bytes into the user library directory and return the path.
+
+    Used by both /chess/upload (browser file upload) and
+    /chess/import-url (server-side URL fetch) — the sidecar validates
+    it's parseable PGN before saving (raises ValueError otherwise), then
+    the caller should call ChessStateManager.reload_games() to pick it up.
+    """
+    text = content.decode("utf-8", errors="replace")
+    if "[Event" not in text and "1." not in text:
+        raise ValueError("Doesn't look like a valid PGN file (no tags or moves found)")
+
+    USER_PGN_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = _sanitize_pgn_filename(filename)
+    dest = USER_PGN_DIR / safe_name
+
+    # Avoid clobbering an existing different file that happens to share a
+    # sanitized name (e.g. two uploads both named "game.pgn"); an upload
+    # of the *same* name is treated as "replace/update" and allowed.
+    if dest.exists():
+        try:
+            if dest.read_bytes() == content:
+                return dest  # identical content already present, no-op
+        except OSError:
+            pass
+        stem, suffix = dest.stem, dest.suffix
+        n = 2
+        while dest.exists():
+            dest = USER_PGN_DIR / f"{stem}-{n}{suffix}"
+            n += 1
+
+    dest.write_bytes(content)
+    _LOGGER.info("Saved uploaded PGN: %s (%d bytes)", dest, len(content))
+    return dest
 
 
 class ChessStateManager:
@@ -325,7 +440,8 @@ class ChessStateManager:
         return None
 
     def _pgn_path(self, game: dict) -> Path:
-        path = PGN_DIR / game["filename"]
+        base = USER_PGN_DIR if game.get("source") == "user" else PGN_DIR
+        path = base / game["filename"]
         if not path.exists():
             raise RuntimeError(f"PGN file not found: {path}")
         return path
@@ -333,6 +449,12 @@ class ChessStateManager:
     def _count_plies_for(self, game: dict | None) -> int:
         if game is None:
             return 1
+        # The scan already computes and caches this per-game — only fall
+        # back to re-parsing the file if an entry is somehow missing it
+        # (e.g. hand-constructed for testing).
+        cached = game.get("total_moves")
+        if isinstance(cached, int) and cached > 0:
+            return cached
         try:
             path = self._pgn_path(game)
             text = path.read_text(encoding="utf-8", errors="replace")
