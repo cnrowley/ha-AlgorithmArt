@@ -33,7 +33,7 @@ PHOTOFRAME_HOST=$(bashio::config 'photoframe_host')
 export PHOTOFRAME_HOST
 export STATE_DIR="/data/state"
 export SGF_DIR="/data/go_sgf"
-export CHESS_PGN_DIR="/app/chess_pgn"
+export CHESS_PGN_DIR="/data/chess_pgn"
 
 mkdir -p /data/state
 
