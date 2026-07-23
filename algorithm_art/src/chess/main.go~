@@ -1,0 +1,130 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"image/color"
+	"os"
+	"strings"
+)
+
+const (
+	ImgW      = 800
+	ImgH      = 480
+	BoardSize = 400
+)
+
+var AllowedPalette = map[string]color.RGBA{
+	"white":  {255, 255, 255, 255},
+	"black":  {0, 0, 0, 255},
+	"red":    {255, 0, 0, 255},
+	"green":  {0, 255, 0, 255},
+	"blue":   {0, 0, 255, 255},
+	"yellow": {255, 255, 0, 255},
+}
+
+type Config struct {
+	Input           string
+	Output          string
+	GameIdx         int
+	MoveIdx         int
+	PieceStyle      string
+	FontPath        string
+	SvgDir          string
+	LightSquare     color.RGBA
+	DarkSquare      color.RGBA
+	BoardBg         color.RGBA
+	GridColor       color.RGBA
+	GridWidth       int
+	BorderColor     color.RGBA
+	BorderWidth     int
+	WhitePieceColor color.RGBA
+	BlackPieceColor color.RGBA
+	HighlightLast   bool
+	HighlightColor  color.RGBA
+	ShowCoords      bool
+	ShowMoveText    bool
+	MoveTextColor   color.RGBA
+	ShowPlayers     bool
+	ShowResult      bool
+}
+
+func parseColor(name string) color.RGBA {
+	c, ok := AllowedPalette[strings.ToLower(name)]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Error: Invalid colour '%s'. Allowed: white, black, red, green, blue, yellow.\n", name)
+		os.Exit(1)
+	}
+	return c
+}
+
+func main() {
+	input := flag.String("input", "", "PGN file")
+	output := flag.String("output", "frame.bmp", "BMP output")
+	gameIdx := flag.Int("game", 1, "Game number (1-based)")
+	moveIdx := flag.Int("move", -1, "Move number (ply). If omitted, shows final position")
+
+	// Art-focused Bauhaus Defaults
+	pieceStyle := flag.String("piece-style", "shape", "Piece style: 'shape', 'glyph', or 'svg'")
+	fontPath := flag.String("font", "", "Path to TrueType font")
+	svgDir := flag.String("svg-dir", "", "Directory containing CBurnett SVGs")
+
+	lightSquare := flag.String("light-square", "white", "Colour for light squares")
+	darkSquare := flag.String("dark-square", "yellow", "Colour for dark squares")
+	boardBg := flag.String("board-background", "white", "Colour for board background")
+	
+	gridColor := flag.String("grid-color", "black", "Colour for grid lines")
+	gridWidth := flag.Int("grid-width", 2, "Width of grid lines")
+	borderColor := flag.String("border-color", "black", "Colour for board border")
+	borderWidth := flag.Int("border-width", 4, "Width of board border")
+
+	whitePieceColor := flag.String("white-piece-color", "red", "Colour for white pieces")
+	blackPieceColor := flag.String("black-piece-color", "black", "Colour for black pieces")
+
+	highlightLast := flag.Bool("highlight-last", true, "Highlight last move squares")
+	highlightColor := flag.String("highlight-color", "blue", "Colour for highlights")
+
+	showCoords := flag.Bool("show-coordinates", false, "Display a-h and 1-8")
+	showMoveText := flag.Bool("show-move-text", true, "Display SAN notation for last move")
+	moveTextColor := flag.String("move-text-color", "black", "Colour for move text")
+
+	showPlayers := flag.Bool("show-player-names", true, "Display player names")
+	showResult := flag.Bool("show-result", true, "Display game result")
+
+	flag.Parse()
+
+	if *input == "" {
+		fmt.Fprintln(os.Stderr, "Error: -input file.pgn is required")
+		os.Exit(1)
+	}
+
+	cfg := Config{
+		Input:           *input,
+		Output:          *output,
+		GameIdx:         *gameIdx,
+		MoveIdx:         *moveIdx,
+		PieceStyle:      *pieceStyle,
+		FontPath:        *fontPath,
+		SvgDir:          *svgDir,
+		LightSquare:     parseColor(*lightSquare),
+		DarkSquare:      parseColor(*darkSquare),
+		BoardBg:         parseColor(*boardBg),
+		GridColor:       parseColor(*gridColor),
+		GridWidth:       *gridWidth,
+		BorderColor:     parseColor(*borderColor),
+		BorderWidth:     *borderWidth,
+		WhitePieceColor: parseColor(*whitePieceColor),
+		BlackPieceColor: parseColor(*blackPieceColor),
+		HighlightLast:   *highlightLast,
+		HighlightColor:  parseColor(*highlightColor),
+		ShowCoords:      *showCoords,
+		ShowMoveText:    *showMoveText,
+		MoveTextColor:   parseColor(*moveTextColor),
+		ShowPlayers:     *showPlayers,
+		ShowResult:      *showResult,
+	}
+
+	initFont(cfg.FontPath)
+	gameData := loadPGN(cfg)
+	renderBMP(cfg, gameData)
+}

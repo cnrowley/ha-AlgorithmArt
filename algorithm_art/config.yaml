@@ -1,5 +1,5 @@
 name: "AlgorithmArt Generator"
-description: "Runs DLA, Fractal, Goban, and Moire art generators for the PhotopainterArt integration."
+description: "Runs DLA, Fractal, Goban, Moire, and Chess art generators for the PhotopainterArt integration."
 version: "1.0.0"
 slug: "algorithm_art"
 init: false
@@ -28,6 +28,22 @@ options:
   chess_cmd: "chess2bmp.x"
   display_width: 800
   display_height: 480
+  # Master orientation switch. When true, chess2bmp is always invoked with
+  # its own -portrait flag (480x800), and display_width/display_height are
+  # swapped for the other generators (DLA/Fractal/Goban/Moire) unless
+  # they're already portrait-shaped. See main.py's DISPLAY_PORTRAIT.
+  portrait: false
+  # Default piece rendering style for chess2bmp: "shape" | "glyph" | "svg".
+  # "svg" uses the bundled Cburnett piece set (data/chess_svg/, copied to
+  # /app/chess_svg by the Dockerfile) for a clean figurine look.
+  chess_piece_style: "svg"
+  # Directory of piece SVGs inside the container — only required when
+  # chess_piece_style (or a per-call piece_style override) is "svg".
+  # Defaults to the bundled set; point this elsewhere to use a different
+  # piece style (must follow the same wK.svg/bQ.svg naming convention).
+  chess_svg_dir: "/app/chess_svg"
+  # TrueType font used for coordinates/move text/player names/result.
+  chess_font: ""
 
 schema:
   port: int
@@ -36,5 +52,10 @@ schema:
   fractal_cmd: str
   goban_cmd: str
   moire_cmd: str
+  chess_cmd: str
   display_width: int
   display_height: int
+  portrait: bool
+  chess_piece_style: list(shape|glyph|svg)
+  chess_svg_dir: str
+  chess_font: str

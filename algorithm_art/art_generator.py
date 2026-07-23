@@ -171,7 +171,7 @@ class ChessParams:
     pgn_url:            str = ""
     game:               int = 1
     move:               int = -1
-    piece_style:        str = "shape"
+    piece_style:        str = "svg"
     white_piece_color:  str = "white"
     black_piece_color:  str = "black"
     light_square:       str = "white"
@@ -180,9 +180,9 @@ class ChessParams:
     grid_color:         str = "black"
     border_color:       str = "black"
     show_coordinates:   bool = False
-    show_move_text:     bool = True
-    show_player_names:  bool = True
-    show_result:        bool = True
+    show_move_text:     bool = False
+    show_player_names:  bool = False
+    show_result:        bool = False
 
 
 # ── Low-level HTTP helper ───────────────────────────────────────────────────

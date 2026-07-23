@@ -121,7 +121,7 @@ SERVICE_GENERATE_ART_SCHEMA = vol.Schema(
         # for chess_source in ("url", "inline") — "library" ignores this and
         # advances its own ply counter instead.
         vol.Optional("chess_move",            default=-1): vol.All(int, vol.Range(min=-1, max=600)),
-        vol.Optional("chess_piece_style",     default="shape"): vol.In(CHESS_PIECE_STYLES),
+        vol.Optional("chess_piece_style",     default="svg"): vol.In(CHESS_PIECE_STYLES),
         vol.Optional("chess_white_piece_color", default="white"): vol.In(CHESS_COLOURS),
         vol.Optional("chess_black_piece_color", default="black"): vol.In(CHESS_COLOURS),
         vol.Optional("chess_light_square",    default="white"): vol.In(CHESS_COLOURS),
@@ -130,9 +130,9 @@ SERVICE_GENERATE_ART_SCHEMA = vol.Schema(
         vol.Optional("chess_grid_color",      default="black"): vol.In(CHESS_COLOURS),
         vol.Optional("chess_border_color",    default="black"): vol.In(CHESS_COLOURS),
         vol.Optional("chess_show_coordinates",   default=False): cv.boolean,
-        vol.Optional("chess_show_move_text",     default=True):  cv.boolean,
-        vol.Optional("chess_show_player_names",  default=True):  cv.boolean,
-        vol.Optional("chess_show_result",        default=True):  cv.boolean,
+        vol.Optional("chess_show_move_text",     default=False):  cv.boolean,
+        vol.Optional("chess_show_player_names",  default=False):  cv.boolean,
+        vol.Optional("chess_show_result",        default=False):  cv.boolean,
     }
 )
 
@@ -358,7 +358,7 @@ async def async_register_services(hass: HomeAssistant, coordinator: Photopainter
                 pgn_url            = data.get("chess_pgn_url", ""),
                 game               = data.get("chess_game", 1),
                 move               = data.get("chess_move", -1),
-                piece_style        = data.get("chess_piece_style", "shape"),
+                piece_style        = data.get("chess_piece_style", "svg"),
                 white_piece_color  = data.get("chess_white_piece_color", "white"),
                 black_piece_color  = data.get("chess_black_piece_color", "black"),
                 light_square       = data.get("chess_light_square", "white"),
@@ -367,9 +367,9 @@ async def async_register_services(hass: HomeAssistant, coordinator: Photopainter
                 grid_color         = data.get("chess_grid_color", "black"),
                 border_color       = data.get("chess_border_color", "black"),
                 show_coordinates   = data.get("chess_show_coordinates", False),
-                show_move_text     = data.get("chess_show_move_text", True),
-                show_player_names  = data.get("chess_show_player_names", True),
-                show_result        = data.get("chess_show_result", True),
+                show_move_text     = data.get("chess_show_move_text", False),
+                show_player_names  = data.get("chess_show_player_names", False),
+                show_result        = data.get("chess_show_result", False),
             ))
             if game_over:
                 _LOGGER.info(

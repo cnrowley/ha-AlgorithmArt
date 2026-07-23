@@ -73,6 +73,10 @@ COPY data/go_sgf /app/go_sgf
 # PGN game library (used by the "library" chess_source — see chess_state.py)
 COPY data/chess_pgn /app/chess_pgn
 
+# Bundled chess piece SVGs (Cburnett set — see data/chess_svg/ATTRIBUTION.md).
+# This is what -piece-style svg / chess_svg_dir points at by default.
+COPY data/chess_svg /app/chess_svg
+
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh
 

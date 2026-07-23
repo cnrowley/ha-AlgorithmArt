@@ -52,18 +52,29 @@ from typing import Any
 
 _LOGGER = logging.getLogger("algorithm_art.chess_state")
 
+def _clean_env(name: str, default: str) -> str:
+    """Same normalization as main.py's _clean_env — see that docstring for
+    why this is needed (bashio::config can export the literal string
+    "null" for an unset option, which os.environ.get's default would
+    never catch)."""
+    v = os.environ.get(name)
+    if v is None or v.strip().lower() in ("", "null", "none"):
+        return default
+    return v
+
+
 # Where the *bundled* PGN game library lives inside the container (copied
 # in at image-build time by the Dockerfile — see data/chess_pgn/). Static
 # assets belong under /app so they are not hidden by HA's /data mount
 # (same reasoning as SGF_DIR in goban_state.py).
-PGN_DIR = Path(os.environ.get("CHESS_PGN_DIR", "/app/chess_pgn"))
+PGN_DIR = Path(_clean_env("CHESS_PGN_DIR", "/app/chess_pgn"))
 
 # Where *user*-added PGNs go — uploads via /chess/upload and imports via
 # /chess/import-url both land here. This is under /data (the add-on's
 # persistent volume) rather than /app, because anything written to /app
 # at runtime is lost the next time the container is recreated (add-on
 # restart/update); /data survives that.
-USER_PGN_DIR = Path(os.environ.get("CHESS_PGN_USER_DIR", "/data/chess_pgn"))
+USER_PGN_DIR = Path(_clean_env("CHESS_PGN_USER_DIR", "/data/chess_pgn"))
 
 # Both directories are scanned directly (see _scan_all) rather than
 # driven by a hand-maintained index file — drop a .pgn file in either

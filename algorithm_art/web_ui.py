@@ -575,9 +575,9 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
           <div class="field">
             <label>Piece style (-piece-style)</label>
             <select id="chess-piece-style" onchange="chessStyleSave()">
+              <option value="svg" selected>SVG figurines</option>
               <option value="shape">Shape</option>
               <option value="glyph">Glyph</option>
-              <option value="svg">SVG</option>
             </select>
           </div>
         </div>
@@ -605,9 +605,9 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
           <label>Display options</label>
           <div class="chk-row">
             <label class="chk"><input type="checkbox" id="chess-show-coords" onchange="chessStyleSave()"> Coordinates</label>
-            <label class="chk"><input type="checkbox" id="chess-show-movetext" checked onchange="chessStyleSave()"> Move text</label>
-            <label class="chk"><input type="checkbox" id="chess-show-players" checked onchange="chessStyleSave()"> Player names</label>
-            <label class="chk"><input type="checkbox" id="chess-show-result" checked onchange="chessStyleSave()"> Result</label>
+            <label class="chk"><input type="checkbox" id="chess-show-movetext" onchange="chessStyleSave()"> Move text</label>
+            <label class="chk"><input type="checkbox" id="chess-show-players" onchange="chessStyleSave()"> Player names</label>
+            <label class="chk"><input type="checkbox" id="chess-show-result" onchange="chessStyleSave()"> Result</label>
           </div>
         </div>
       </div>
@@ -702,7 +702,7 @@ const S = {
   filtered:    [],
   currentId:   null,
   chessMode:        'random',
-  chessPieceStyle:  'shape',
+  chessPieceStyle:  'svg',
   chessWhitePiece:  'white',
   chessBlackPiece:  'black',
   chessLight:       'white',
@@ -891,7 +891,7 @@ async function poll(){
     S.moireDensity=sch.moire_density||1.0;
     document.getElementById('moire-density').value=S.moireDensity;
     document.getElementById('moire-density-val').textContent=parseFloat(S.moireDensity).toFixed(2)+'\u00d7';
-    document.getElementById('chess-piece-style').value=sch.chess_piece_style||'shape';
+    document.getElementById('chess-piece-style').value=sch.chess_piece_style||'svg';
     setSwatchSel('chess-white-piece-sw','chess-white-piece-color', sch.chess_white_color||'white');
     setSwatchSel('chess-black-piece-sw','chess-black-piece-color', sch.chess_black_color||'black');
     setSwatchSel('chess-light-sw','chess-light-square', sch.chess_light_square||'white');
@@ -1404,15 +1404,15 @@ def ui_generate():
         elif art_type == "chess":
             gen_resp = rq.post(f"{base}/generate/chess", json={
                 "chess_source":       data.get("chess_source", "library"),
-                "piece_style":        data.get("chess_piece_style",       "shape"),
+                "piece_style":        data.get("chess_piece_style",       "svg"),
                 "white_piece_color":  data.get("chess_white_piece_color", "white"),
                 "black_piece_color":  data.get("chess_black_piece_color", "black"),
                 "light_square":       data.get("chess_light_square",      "white"),
                 "dark_square":        data.get("chess_dark_square",       "green"),
                 "show_coordinates":   data.get("chess_show_coordinates",  False),
-                "show_move_text":     data.get("chess_show_move_text",    True),
-                "show_player_names":  data.get("chess_show_player_names", True),
-                "show_result":        data.get("chess_show_result",      True),
+                "show_move_text":     data.get("chess_show_move_text",    False),
+                "show_player_names":  data.get("chess_show_player_names", False),
+                "show_result":        data.get("chess_show_result",      False),
                 # "library" advances the sidecar's own persistent PGN game —
                 # same pattern as goban_source="file" above.
             }, timeout=180)

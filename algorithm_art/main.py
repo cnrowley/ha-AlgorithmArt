@@ -114,16 +114,44 @@ app = Flask(__name__)
 app.register_blueprint(ui_blueprint)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DLA_CMD         = os.environ.get("DLA_CMD",         "dla.x")
-FRACTAL_CMD     = os.environ.get("FRACTAL_CMD",     "fractal.x")
-GOBAN_CMD       = os.environ.get("GOBAN_CMD",       "goban.x")
-MOIRE_CMD       = os.environ.get("MOIRE_CMD",       "moire.x")
-CHESS_CMD       = os.environ.get("CHESS_CMD",       "chess2bmp.x")
-DEFAULT_WIDTH   = int(os.environ.get("DISPLAY_WIDTH",  "600"))
-DEFAULT_HEIGHT  = int(os.environ.get("DISPLAY_HEIGHT", "448"))
-PHOTOFRAME_HOST = os.environ.get("PHOTOFRAME_HOST", "photoframe.local")
-STATE_DIR       = Path(os.environ.get("STATE_DIR",  "/data/state"))
-PORT            = int(os.environ.get("PORT", "8765"))
+def _clean_env(name: str, default: str) -> str:
+    """Read an env var, treating a missing value OR the literal strings
+    "null"/"none"/"" (case-insensitive) as "unset" and falling back to
+    ``default``.
+
+    This exists because of a real bug: Home Assistant add-on options that
+    are absent from a user's saved options.json (e.g. because config.yaml
+    gained a new option after their add-on was first installed, and they
+    haven't re-saved the Configuration tab) cause `bashio::config 'key'`
+    to print the literal text "null" rather than nothing — so
+    `CHESS_CMD=$(bashio::config 'chess_cmd')` in run.sh was exporting the
+    5-character string "null", not an empty/unset variable.
+    `os.environ.get("CHESS_CMD", "chess2bmp.x")` then dutifully returned
+    "null" (the env var WAS set, just to the wrong value), _available()
+    correctly reported "null" doesn't exist on PATH, and every
+    /generate/chess call failed with `'null' not found` (Python's repr()
+    of the string "null"). run.sh now passes bashio::config its own
+    default argument (the real fix), but this normalization is kept as a
+    second line of defense — for CHESS_CMD specifically, and for every
+    other env-derived config value, since the same class of bug could hit
+    any of them the same way.
+    """
+    v = os.environ.get(name)
+    if v is None or v.strip().lower() in ("", "null", "none"):
+        return default
+    return v
+
+
+DLA_CMD         = _clean_env("DLA_CMD",         "dla.x")
+FRACTAL_CMD     = _clean_env("FRACTAL_CMD",     "fractal.x")
+GOBAN_CMD       = _clean_env("GOBAN_CMD",       "goban.x")
+MOIRE_CMD       = _clean_env("MOIRE_CMD",       "moire.x")
+CHESS_CMD       = _clean_env("CHESS_CMD",       "chess2bmp.x")
+DEFAULT_WIDTH   = int(_clean_env("DISPLAY_WIDTH",  "600"))
+DEFAULT_HEIGHT  = int(_clean_env("DISPLAY_HEIGHT", "448"))
+PHOTOFRAME_HOST = _clean_env("PHOTOFRAME_HOST", "photoframe.local")
+STATE_DIR       = Path(_clean_env("STATE_DIR",  "/data/state"))
+PORT            = int(_clean_env("PORT", "8765"))
 
 # ── Master orientation switch ───────────────────────────────────────────────
 # A single add-on option ("portrait") controls every generator's notion of
@@ -133,13 +161,16 @@ PORT            = int(os.environ.get("PORT", "8765"))
 # DISPLAY_WIDTH/DISPLAY_HEIGHT, so when portrait mode is on and the operator
 # hasn't already supplied portrait-shaped dimensions (width < height), the
 # configured width/height are swapped for those generators automatically.
-DISPLAY_PORTRAIT = os.environ.get("DISPLAY_PORTRAIT", "false").strip().lower() in ("1", "true", "yes", "on")
+DISPLAY_PORTRAIT = _clean_env("DISPLAY_PORTRAIT", "false").strip().lower() in ("1", "true", "yes", "on")
 if DISPLAY_PORTRAIT and DEFAULT_WIDTH > DEFAULT_HEIGHT:
     DEFAULT_WIDTH, DEFAULT_HEIGHT = DEFAULT_HEIGHT, DEFAULT_WIDTH
 
-CHESS_PIECE_STYLE = os.environ.get("CHESS_PIECE_STYLE", "shape")
-CHESS_SVG_DIR     = os.environ.get("CHESS_SVG_DIR", "")
-CHESS_FONT        = os.environ.get("CHESS_FONT", "")
+# Default look: SVG figurines (bundled Cburnett piece set — see
+# data/chess_svg/ and CHESS-DEFAULT-LOOK.md) with no on-image text, so a
+# frame looks like a clean diagram rather than an annotated worksheet.
+CHESS_PIECE_STYLE = _clean_env("CHESS_PIECE_STYLE", "svg")
+CHESS_SVG_DIR     = _clean_env("CHESS_SVG_DIR", "/app/chess_svg")
+CHESS_FONT        = _clean_env("CHESS_FONT", "")
 
 FRACTAL_STATE_FILE = STATE_DIR / "fractal_state.json"
 MOIRE_STATE_FILE   = STATE_DIR / "moire_state.json"
@@ -397,9 +428,9 @@ def _scheduler_generate(generator: str, state: dict) -> bytes | None:
                 "light_square":        state.get("chess_light_square",    "white"),
                 "dark_square":         state.get("chess_dark_square",     "green"),
                 "show_coordinates":    state.get("chess_show_coordinates", False),
-                "show_move_text":      state.get("chess_show_move_text",  True),
-                "show_player_names":   state.get("chess_show_player_names", True),
-                "show_result":         state.get("chess_show_result",    True),
+                "show_move_text":      state.get("chess_show_move_text",  False),
+                "show_player_names":   state.get("chess_show_player_names", False),
+                "show_result":         state.get("chess_show_result",    False),
             }, timeout=180)
 
             # Exit code 1 (FATAL) comes back as HTTP 500 from /generate/chess
@@ -547,9 +578,9 @@ def status():
             "chess_light_square":    sch.get("chess_light_square",    "white"),
             "chess_dark_square":     sch.get("chess_dark_square",     "green"),
             "chess_show_coordinates": sch.get("chess_show_coordinates", False),
-            "chess_show_move_text":   sch.get("chess_show_move_text",  True),
-            "chess_show_player_names": sch.get("chess_show_player_names", True),
-            "chess_show_result":     sch.get("chess_show_result",     True),
+            "chess_show_move_text":   sch.get("chess_show_move_text",  False),
+            "chess_show_player_names": sch.get("chess_show_player_names", False),
+            "chess_show_result":     sch.get("chess_show_result",     False),
             "chess_reset_after_game": sch.get("chess_reset_after_game", True),
         },
         "interval_presets": [{"label": l, "seconds": s} for l, s in INTERVAL_PRESETS],
@@ -1307,13 +1338,34 @@ def generate_chess():
         # target_ply == -1 means "render final position" (chess2bmp's own
         # convention for -move -1, reused by ChessStateManager for the same
         # purpose during the hold-on-final-position phase).
+
+        # Resolve piece style with a safety net: chess2bmp doesn't error on
+        # a missing/empty -svg-dir when -piece-style svg is requested — it
+        # just silently draws no pieces at all (see pieces.go's
+        # drawSvgPiece), which would ship a blank board with no warning.
+        # Fall back to "shape" instead if the configured directory doesn't
+        # actually exist or has no .svg files in it.
+        piece_style = data.get("piece_style", CHESS_PIECE_STYLE) or CHESS_PIECE_STYLE
+        svg_dir     = data.get("svg_dir", CHESS_SVG_DIR) or CHESS_SVG_DIR
+        svg_dir_ok  = bool(svg_dir) and os.path.isdir(svg_dir) and any(
+            f.endswith(".svg") for f in os.listdir(svg_dir)
+        )
+        if piece_style == "svg" and not svg_dir_ok:
+            _LOGGER.warning(
+                "Chess: piece_style=svg but svg_dir=%r has no .svg files — "
+                "falling back to piece_style=shape for this frame "
+                "(bundle piece SVGs at %s or set chess_svg_dir)",
+                svg_dir, svg_dir or CHESS_SVG_DIR,
+            )
+            piece_style = "shape"
+
         argv = [
             CHESS_CMD,
             "-input",  str(pgn_path),
             "-output", str(output_bmp),
             "-game",   str(game),
             "-move",   str(target_ply),
-            "-piece-style",       data.get("piece_style",       CHESS_PIECE_STYLE),
+            "-piece-style",       piece_style,
             "-white-piece-color", data.get("white_piece_color", "white"),
             "-black-piece-color", data.get("black_piece_color", "black"),
             "-light-square",      data.get("light_square",      "white"),
@@ -1324,17 +1376,20 @@ def generate_chess():
         ]
         if DISPLAY_PORTRAIT:
             argv.append("-portrait")
-        if data.get("piece_style", CHESS_PIECE_STYLE) == "svg" and CHESS_SVG_DIR:
-            argv += ["-svg-dir", CHESS_SVG_DIR]
+        if piece_style == "svg":
+            argv += ["-svg-dir", svg_dir]
         if CHESS_FONT:
             argv += ["-font", CHESS_FONT]
+        # Default look is a clean diagram with no on-image text — pass
+        # show_coordinates/show_move_text/show_player_names/show_result
+        # explicitly (as true) to opt back into any of them.
         if bool(data.get("show_coordinates", False)):
             argv.append("-show-coordinates")
-        if bool(data.get("show_move_text", True)):
+        if bool(data.get("show_move_text", False)):
             argv.append("-show-move-text")
-        if bool(data.get("show_player_names", True)):
+        if bool(data.get("show_player_names", False)):
             argv.append("-show-player-names")
-        if bool(data.get("show_result", True)):
+        if bool(data.get("show_result", False)):
             argv.append("-show-result")
 
         # Exit codes 0 (OK) and 2 (BOUNDARY: GAME_OVER/PAST_END) both mean
