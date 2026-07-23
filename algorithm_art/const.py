@@ -46,7 +46,8 @@ ART_TYPE_DLA        = "dla"
 ART_TYPE_FRACTAL = "fractal"
 ART_TYPE_GOBAN      = "goban"
 ART_TYPE_MOIRE      = "moire"
-ART_TYPES           = [ART_TYPE_DLA, ART_TYPE_FRACTAL, ART_TYPE_GOBAN, ART_TYPE_MOIRE]
+ART_TYPE_CHESS      = "chess"
+ART_TYPES           = [ART_TYPE_DLA, ART_TYPE_FRACTAL, ART_TYPE_GOBAN, ART_TYPE_MOIRE, ART_TYPE_CHESS]
 
 # Fractal colour options (must match the binary's colorMap)
 FRACTAL_COLOURS  = ["black", "white", "green", "blue", "red", "yellow", "orange"]
@@ -63,3 +64,10 @@ MOIRE_PATTERNS = [
     "kagome", "circles", "spokes", "checkerboard",
 ]
 MOIRE_COLOURS = ["white", "black", "red", "green", "blue", "yellow"]
+
+# Chess options (kept here for reference; entity modules import the
+# canonical lists directly from art_generator.py)
+CHESS_SOURCES      = ["library", "url", "inline"]
+CHESS_SELECTION_MODES = ["random", "sequential", "manual"]
+CHESS_PIECE_STYLES = ["shape", "glyph", "svg"]
+CHESS_COLOURS      = ["white", "black", "red", "green", "blue", "yellow"]

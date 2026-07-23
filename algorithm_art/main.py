@@ -34,6 +34,23 @@ POST /generate/moire              { "pattern", "iteration", "width", "height",
 POST /generate/moire/reset        {}  (clears the last moire_state.json — the
                                         iteration counter itself lives in HA)
 
+── Chess ──────────────────────────────────────────────────────────────────────
+POST /generate/chess              { chess_source, game, plies_per_frame,
+                                     piece_style, white_piece_color,
+                                     black_piece_color, light_square,
+                                     dark_square, board_background,
+                                     grid_color, border_color,
+                                     show_coordinates, show_move_text,
+                                     show_player_names, show_result }
+                                   Runs chess2bmp; see chess_state.py for the
+                                   exit-code (0/1/2) handling this implements.
+GET  /chess/games                 list all games from pgn_directory.py
+POST /chess/mode                  { "mode": "random"|"sequential"|"manual" }
+POST /chess/select                { "game_id": N }
+POST /chess/restart               {}
+POST /chess/skip                  {}
+POST /chess/move                  { "move": N }   (-1 = final position)
+
 ── Scheduler ──────────────────────────────────────────────────────────────────
 POST /scheduler/settings          { enabled, interval_seconds, frames_per_update,
                                     active_generator,
@@ -70,6 +87,7 @@ from flask import Flask, Response, jsonify, request
 sys.path.insert(0, "/app")
 
 from goban_state import GobanStateManager
+from chess_state import ChessStateManager, EXIT_OK, EXIT_BOUNDARY, EXIT_FATAL
 from scheduler import Scheduler, INTERVAL_PRESETS
 from web_ui import ui as ui_blueprint
 
@@ -87,11 +105,28 @@ DLA_CMD         = os.environ.get("DLA_CMD",         "dla.x")
 FRACTAL_CMD     = os.environ.get("FRACTAL_CMD",     "fractal.x")
 GOBAN_CMD       = os.environ.get("GOBAN_CMD",       "goban.x")
 MOIRE_CMD       = os.environ.get("MOIRE_CMD",       "moire.x")
+CHESS_CMD       = os.environ.get("CHESS_CMD",       "chess2bmp.x")
 DEFAULT_WIDTH   = int(os.environ.get("DISPLAY_WIDTH",  "600"))
 DEFAULT_HEIGHT  = int(os.environ.get("DISPLAY_HEIGHT", "448"))
 PHOTOFRAME_HOST = os.environ.get("PHOTOFRAME_HOST", "photoframe.local")
 STATE_DIR       = Path(os.environ.get("STATE_DIR",  "/data/state"))
 PORT            = int(os.environ.get("PORT", "8765"))
+
+# ── Master orientation switch ───────────────────────────────────────────────
+# A single add-on option ("portrait") controls every generator's notion of
+# orientation. chess2bmp has its own native -portrait flag (swapping in a
+# fixed 480x800 canvas per the Technical Specification), so it's passed
+# straight through. The other generators are driven purely by
+# DISPLAY_WIDTH/DISPLAY_HEIGHT, so when portrait mode is on and the operator
+# hasn't already supplied portrait-shaped dimensions (width < height), the
+# configured width/height are swapped for those generators automatically.
+DISPLAY_PORTRAIT = os.environ.get("DISPLAY_PORTRAIT", "false").strip().lower() in ("1", "true", "yes", "on")
+if DISPLAY_PORTRAIT and DEFAULT_WIDTH > DEFAULT_HEIGHT:
+    DEFAULT_WIDTH, DEFAULT_HEIGHT = DEFAULT_HEIGHT, DEFAULT_WIDTH
+
+CHESS_PIECE_STYLE = os.environ.get("CHESS_PIECE_STYLE", "shape")
+CHESS_SVG_DIR     = os.environ.get("CHESS_SVG_DIR", "")
+CHESS_FONT        = os.environ.get("CHESS_FONT", "")
 
 FRACTAL_STATE_FILE = STATE_DIR / "fractal_state.json"
 MOIRE_STATE_FILE   = STATE_DIR / "moire_state.json"
@@ -100,12 +135,17 @@ DLA_SEQUENCE_LENGTH = 120
 
 # ── Shared state ──────────────────────────────────────────────────────────────
 _goban = GobanStateManager()
+_chess = ChessStateManager()
 
 _dla_next_frame    = 1
 _fractal_zoom_step = 0
 _moire_iteration   = 0
 _last_source       = "generative"
 _last_art_type     = "dla"
+# Set whenever chess2bmp exits 1 (fatal). Cleared on the next successful
+# call. Surfaced in /status and /health so the web UI / HA can show it,
+# and used to gate the scheduler's auto-advance (see _scheduler_generate).
+_chess_last_error: str | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -333,6 +373,37 @@ def _scheduler_generate(generator: str, state: dict) -> bytes | None:
                 "step":       step,
             }, timeout=180)
 
+        elif generator == "chess":
+            resp = requests.post(f"{base}/generate/chess", json={
+                "chess_source":        "library",
+                "plies_per_frame":     state.get("frames_per_update",     1),
+                "piece_style":         state.get("chess_piece_style",     CHESS_PIECE_STYLE),
+                "white_piece_color":   state.get("chess_white_color",     "white"),
+                "black_piece_color":   state.get("chess_black_color",     "black"),
+                "light_square":        state.get("chess_light_square",    "white"),
+                "dark_square":         state.get("chess_dark_square",     "green"),
+                "show_coordinates":    state.get("chess_show_coordinates", False),
+                "show_move_text":      state.get("chess_show_move_text",  True),
+                "show_player_names":   state.get("chess_show_player_names", True),
+                "show_result":         state.get("chess_show_result",    True),
+            }, timeout=180)
+
+            # Exit code 1 (FATAL) comes back as HTTP 500 from /generate/chess
+            # — per the spec, halt auto-incrementing rather than retrying on
+            # every tick. We do that simply by NOT touching the scheduler's
+            # "enabled" flag here (auto-retry on the next tick is harmless
+            # since state wasn't advanced) but we DO make sure the failure
+            # is loud: it's already logged inside generate_chess, and the
+            # error message is in _chess_last_error / persistent_notification
+            # territory on the HA side (see docs).
+            if resp.status_code != 200:
+                try:
+                    err = resp.json().get("error", f"HTTP {resp.status_code}")
+                except Exception:
+                    err = f"HTTP {resp.status_code}"
+                _LOGGER.error("Chess generator failed (fatal, state not advanced): %s", err)
+                return None
+
         else:
             _LOGGER.error("Unknown generator: %s", generator)
             return None
@@ -367,6 +438,7 @@ def health():
             "fractal": _available(FRACTAL_CMD),
             "goban":   _available(GOBAN_CMD),
             "moire":   _available(MOIRE_CMD),
+            "chess":   _available(CHESS_CMD),
         },
     })
 
@@ -385,9 +457,24 @@ def status():
             game_name = game.get("filename", "—")
             game_path = game.get("original_path", "—")
 
+    cs = _chess.state
+    chess_current_id = cs.get("current_game_id")
+    chess_game_name  = "—"
+    chess_event      = "—"
+    if chess_current_id:
+        cg = next((g for g in _chess.games if g["id"] == chess_current_id), None)
+        if cg:
+            chess_game_name = cg.get("filename", "—")
+            chess_event     = cg.get("event", "—")
+
     return jsonify({
         "image_source": _last_source,
         "art_type":     _last_art_type,
+        "display": {
+            "width":    DEFAULT_WIDTH,
+            "height":   DEFAULT_HEIGHT,
+            "portrait": DISPLAY_PORTRAIT,
+        },
         "dla": {
             "next_frame":      _dla_next_frame,
             "sequence_length": 120,
@@ -407,6 +494,15 @@ def status():
             "game_path":       game_path,
             "current_move":    gs.get("current_move", 0),
             "total_moves":     gs.get("total_moves",  0),
+        },
+        "chess": {
+            "selection_mode":  cs.get("selection_mode", "random"),
+            "current_game_id": chess_current_id,
+            "game_name":       chess_game_name,
+            "event":           chess_event,
+            "current_move":    cs.get("current_move", 0),
+            "total_moves":     cs.get("total_moves",  0),
+            "last_error":      _chess_last_error,
         },
         "scheduler": {
             "enabled":           sch.get("enabled",           False),
@@ -429,6 +525,17 @@ def status():
             "moire_pattern":         sch.get("moire_pattern",         "honeycomb"),
             "moire_background":      sch.get("moire_background",      "white"),
             "moire_linecolor":       sch.get("moire_linecolor",       "black"),
+            "chess_mode":            sch.get("chess_mode",            "random"),
+            "chess_piece_style":     sch.get("chess_piece_style",     CHESS_PIECE_STYLE),
+            "chess_white_color":     sch.get("chess_white_color",     "white"),
+            "chess_black_color":     sch.get("chess_black_color",     "black"),
+            "chess_light_square":    sch.get("chess_light_square",    "white"),
+            "chess_dark_square":     sch.get("chess_dark_square",     "green"),
+            "chess_show_coordinates": sch.get("chess_show_coordinates", False),
+            "chess_show_move_text":   sch.get("chess_show_move_text",  True),
+            "chess_show_player_names": sch.get("chess_show_player_names", True),
+            "chess_show_result":     sch.get("chess_show_result",     True),
+            "chess_reset_after_game": sch.get("chess_reset_after_game", True),
         },
         "interval_presets": [{"label": l, "seconds": s} for l, s in INTERVAL_PRESETS],
     })
@@ -956,6 +1063,224 @@ def generate_goban():
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+# ── Chess ─────────────────────────────────────────────────────────────────────
+#
+# chess2bmp replays a PGN file up to a target ply and renders an uncompressed
+# 24-bit BMP. Its exit-code protocol (see the module docstring in
+# chess_state.py) tells us three different things about the SAME successful
+# render:
+#
+#   0  OK           more plies remain in the game after this one
+#   2  BOUNDARY     this was the last ply (GAME_OVER) or -move was past the
+#                   end of the game (PAST_END) — the image is still valid
+#   1  FATAL        chess2bmp could not produce an image at all (bad PGN,
+#                   missing font/SVG dir, invalid flags, ...)
+#
+# generate_chess() below implements exactly the "Exit Code Response Logic"
+# from the spec: 0/2 return the rendered image and advance state (2 also
+# resets/advances to the next game once the hold period elapses, handled
+# inside ChessStateManager); 1 does NOT advance state, is logged with full
+# stderr, and is surfaced to callers (and thus to the scheduler and HA) as
+# an HTTP 500 with the raw chess2bmp error message.
+
+@app.get("/chess/games")
+def chess_games():
+    return jsonify(_chess.games)
+
+
+@app.post("/chess/mode")
+def chess_mode():
+    data = request.get_json(force=True) or {}
+    try:
+        _chess.set_mode(data.get("mode", "random"))
+        return jsonify({"status": "ok"})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.post("/chess/select")
+def chess_select():
+    data = request.get_json(force=True) or {}
+    try:
+        game = _chess.select_game(int(data.get("game_id", 0)))
+        return jsonify({"status": "ok", "game": game})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+
+
+@app.post("/chess/restart")
+def chess_restart():
+    _chess.restart_current_game()
+    return jsonify({"status": "ok"})
+
+
+@app.post("/chess/skip")
+def chess_skip():
+    _chess.skip_to_next_game()
+    return jsonify({"status": "ok"})
+
+
+@app.post("/chess/move")
+def chess_move():
+    data = request.get_json(force=True) or {}
+    move = int(data.get("move", 0))
+    _chess.set_move(move)
+    return jsonify({"status": "ok", "move": move})
+
+
+@app.post("/generate/chess")
+def generate_chess():
+    """Render the next chess frame with chess2bmp and return BMP bytes.
+
+    Request body (all optional; sensible defaults applied):
+        chess_source     "library" | "url" | "inline"   (default "library")
+        pgn_text         raw PGN text, required if chess_source == "inline"
+        pgn_url          URL to fetch a PGN from, required if == "url"
+        game             1-based game index within the PGN (default 1)
+        plies_per_frame  how many plies to advance this call (default 1,
+                          mirrors goban's moves_per_frame / the scheduler's
+                          "frames per update" setting)
+        piece_style      "shape" | "glyph" | "svg"
+        white_piece_color / black_piece_color
+        light_square / dark_square / board_background
+        grid_color / border_color
+        show_coordinates / show_move_text / show_player_names / show_result
+    """
+    global _last_source, _last_art_type, _chess_last_error
+
+    if not _available(CHESS_CMD):
+        return jsonify({"error": f"{CHESS_CMD!r} not found"}), 503
+
+    data          = request.get_json(force=True) or {}
+    chess_source  = data.get("chess_source", "library")
+
+    work_dir   = tempfile.mkdtemp(prefix="chess_")
+    work_path  = Path(work_dir)
+    output_bmp = work_path / "frame.bmp"
+
+    try:
+        # ── Resolve which PGN file (and target ply) to render ──────────────
+        if chess_source == "library":
+            plies_per_frame = int(
+                data.get("plies_per_frame", data.get("frames_per_update", 1)) or 1
+            )
+            pgn_path, target_ply = _chess.next_frame(plies_per_frame)
+            game = int(_chess.current_game().get("game_index", 1)) if _chess.current_game() else 1
+
+        elif chess_source == "inline":
+            pgn_text = data.get("pgn_text", "").strip()
+            if not pgn_text:
+                return jsonify({"error": "pgn_text is empty"}), 400
+            pgn_path = work_path / "chess.pgn"
+            pgn_path.write_text(pgn_text, encoding="utf-8")
+            target_ply = int(data.get("move", -1))
+            game = int(data.get("game", 1))
+
+        elif chess_source == "url":
+            url = data.get("pgn_url", "").strip()
+            if not url:
+                return jsonify({"error": "pgn_url is empty"}), 400
+            resp = requests.get(url, timeout=15)
+            resp.raise_for_status()
+            pgn_path = work_path / "downloaded.pgn"
+            pgn_path.write_text(resp.content.decode("utf-8", errors="replace"), encoding="utf-8")
+            target_ply = int(data.get("move", -1))
+            game = int(data.get("game", 1))
+
+        else:
+            return jsonify({"error": f"Unknown chess_source: {chess_source!r}"}), 400
+
+        # target_ply == -1 means "render final position" (chess2bmp's own
+        # convention for -move -1, reused by ChessStateManager for the same
+        # purpose during the hold-on-final-position phase).
+        argv = [
+            CHESS_CMD,
+            "-input",  str(pgn_path),
+            "-output", str(output_bmp),
+            "-game",   str(game),
+            "-move",   str(target_ply),
+            "-piece-style",       data.get("piece_style",       CHESS_PIECE_STYLE),
+            "-white-piece-color", data.get("white_piece_color", "white"),
+            "-black-piece-color", data.get("black_piece_color", "black"),
+            "-light-square",      data.get("light_square",      "white"),
+            "-dark-square",       data.get("dark_square",       "green"),
+            "-board-background",  data.get("board_background",  "white"),
+            "-grid-color",        data.get("grid_color",        "black"),
+            "-border-color",      data.get("border_color",      "black"),
+        ]
+        if DISPLAY_PORTRAIT:
+            argv.append("-portrait")
+        if data.get("piece_style", CHESS_PIECE_STYLE) == "svg" and CHESS_SVG_DIR:
+            argv += ["-svg-dir", CHESS_SVG_DIR]
+        if CHESS_FONT:
+            argv += ["-font", CHESS_FONT]
+        if bool(data.get("show_coordinates", False)):
+            argv.append("-show-coordinates")
+        if bool(data.get("show_move_text", True)):
+            argv.append("-show-move-text")
+        if bool(data.get("show_player_names", True)):
+            argv.append("-show-player-names")
+        if bool(data.get("show_result", True)):
+            argv.append("-show-result")
+
+        # Exit codes 0 (OK) and 2 (BOUNDARY: GAME_OVER/PAST_END) both mean
+        # chess2bmp produced a usable image — only 1 (FATAL) is a real
+        # failure. _run() raises RuntimeError for anything outside
+        # allowed_exit_codes, which is exactly the "exit 1" case here.
+        result = _run(argv, allowed_exit_codes=(EXIT_OK, EXIT_BOUNDARY))
+        stdout = result.stdout.decode(errors="replace").strip()
+        _LOGGER.debug("chess2bmp stdout: %s\nchess2bmp stderr: %s",
+                      _truncate(stdout), _truncate(result.stderr.decode(errors="replace")))
+
+        if not output_bmp.exists() or output_bmp.stat().st_size == 0:
+            _LOGGER.error(
+                "Chess: expected %s after '%s' (exit %d) but it is %s",
+                output_bmp, " ".join(argv), result.returncode,
+                "missing" if not output_bmp.exists() else "empty (0 bytes)",
+            )
+            _log_dir(work_path, "Chess")
+            return jsonify({
+                "error": "chess2bmp produced no output",
+                "detail": f"expected {output_bmp} (exit {result.returncode}); "
+                          f"see add-on log for stdout/stderr",
+            }), 500
+
+        data_bytes      = output_bmp.read_bytes()
+        _chess_last_error = None
+        _last_source    = "generative"
+        _last_art_type  = "chess"
+
+        boundary = (result.returncode == EXIT_BOUNDARY)
+        _LOGGER.info(
+            "Chess: %d bytes  game=%d  ply=%d  exit=%d (%s)  status=%s",
+            len(data_bytes), game, target_ply, result.returncode,
+            "boundary/game-over" if boundary else "ok", stdout or "(no status line)",
+        )
+        return Response(
+            data_bytes,
+            mimetype="image/bmp",
+            headers={"X-Chess-Status": "GAME_OVER" if boundary else "OK"},
+        )
+
+    except RuntimeError as exc:
+        # Exit code 1 (FATAL) lands here. Per the spec: log stderr, do NOT
+        # advance the move counter, and surface the error so the caller
+        # (scheduler or HA service call) can notify the user and halt
+        # auto-incrementing rather than silently pushing a stale/garbled
+        # image or skipping ahead as if nothing happened.
+        _chess_last_error = str(exc)
+        _LOGGER.error("Chess FATAL (chess2bmp exit 1): %s", exc)
+        _log_dir(work_path, "Chess")
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:
+        _chess_last_error = str(exc)
+        _LOGGER.error("Chess unexpected error: %s", exc, exc_info=True)
+        _log_dir(work_path, "Chess")
+        return jsonify({"error": f"Unexpected error: {exc}"}), 500
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 
 @app.post("/scheduler/settings")
@@ -967,6 +1292,10 @@ def scheduler_settings():
         "goban_bg", "goban_board", "goban_white_color", "goban_black_color",
         "goban_grid_thickness", "goban_highlight", "goban_mode",
         "moire_pattern", "moire_background", "moire_linecolor",
+        "chess_mode", "chess_piece_style", "chess_white_color", "chess_black_color",
+        "chess_light_square", "chess_dark_square", "chess_show_coordinates",
+        "chess_show_move_text", "chess_show_player_names", "chess_show_result",
+        "chess_reset_after_game",
     }
     updates = {k: v for k, v in data.items() if k in allowed}
 
@@ -1072,17 +1401,21 @@ def push_to_device():
 # Bump this whenever a diagnostic/behavioral change is made, so the running
 # container's log makes it obvious which build is actually deployed instead
 # of having to infer it from which log lines are (or aren't) present.
-BUILD_MARKER = "2026-07-19.1-bmp-diagnostics+dla-persist+push-diagnostics+moire"
+BUILD_MARKER = "2026-07-22.1-bmp-diagnostics+dla-persist+push-diagnostics+moire+chess"
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     _LOGGER.info("AlgorithmArt build: %s", BUILD_MARKER)
     _LOGGER.info(
-        "AlgorithmArt starting on :%d  (dla=%s  fractal=%s  goban=%s  moire=%s  device=%s)",
-        PORT, DLA_CMD, FRACTAL_CMD, GOBAN_CMD, MOIRE_CMD, PHOTOFRAME_HOST,
+        "AlgorithmArt starting on :%d  (dla=%s  fractal=%s  goban=%s  moire=%s  chess=%s  device=%s)",
+        PORT, DLA_CMD, FRACTAL_CMD, GOBAN_CMD, MOIRE_CMD, CHESS_CMD, PHOTOFRAME_HOST,
+    )
+    _LOGGER.info(
+        "Display: %dx%d (portrait=%s)", DEFAULT_WIDTH, DEFAULT_HEIGHT, DISPLAY_PORTRAIT,
     )
     _LOGGER.info("SGF library: %d games loaded", len(_goban.games))
+    _LOGGER.info("PGN library: %d games loaded", len(_chess.games))
     _LOGGER.info("Web UI: http://localhost:%d/ui", PORT)
     _scheduler.start()
     app.run(host="0.0.0.0", port=PORT)

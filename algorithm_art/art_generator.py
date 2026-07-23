@@ -15,6 +15,13 @@ Sidecar API (default base URL http://localhost:8765):
                                   "grid_thickness", "highlight" }
     POST /generate/moire        { "pattern", "iteration", "background",
                                   "linecolor", "width", "height" }
+    POST /generate/chess        { "chess_source", "game", "move",
+                                  "piece_style", "white_piece_color",
+                                  "black_piece_color", "light_square",
+                                  "dark_square", "board_background",
+                                  "grid_color", "border_color",
+                                  "show_coordinates", "show_move_text",
+                                  "show_player_names", "show_result" }
     POST /fractal/reset      {}
     POST /generate/moire/reset  {}
     GET  /health
@@ -66,6 +73,14 @@ MOIRE_PATTERNS = [
 ]
 MOIRE_RECOMMENDED_PATTERNS = ["honeycomb", "hexdots", "circles", "triangular"]
 MOIRE_COLOURS = ["white", "black", "red", "green", "blue", "yellow"]
+
+# ── Chess option lists ───────────────────────────────────────────────────────
+# (used by HA entity option lists and the service schema; must match
+# chess2bmp's AllowedPalette and -piece-style choices)
+CHESS_SOURCES          = ["library", "url", "inline"]
+CHESS_SELECTION_MODES  = ["random", "sequential", "manual"]
+CHESS_PIECE_STYLES     = ["shape", "glyph", "svg"]
+CHESS_COLOURS          = ["white", "black", "red", "green", "blue", "yellow"]
 
 
 # ── Parameter dataclasses ───────────────────────────────────────────────────
@@ -127,6 +142,41 @@ class GobanParams:
     black_color:     str = "black"
     grid_thickness:  int = 1
     highlight:       str = "ring"
+
+
+@dataclass
+class ChessParams:
+    """Parameters for chess2bmp.
+
+    ``chess_source="library"`` drives the sidecar's own ChessStateManager
+    (persistent, advances one game at a time — see chess_state.py); the
+    ``game``/``move`` fields below are only meaningful for "url"/"inline"
+    sources, where HA is telling the sidecar exactly which ply of exactly
+    which PGN text to render. ``move=-1`` renders the final position,
+    matching chess2bmp's own convention.
+
+    Orientation (portrait vs. landscape) is a sidecar-wide setting (the
+    add-on's "portrait" option — see main.py's DISPLAY_PORTRAIT) rather
+    than a per-call parameter, since the PhotoPainter's physical mounting
+    doesn't change from one generate call to the next.
+    """
+    chess_source:       str = "library"
+    pgn_text:           str = ""
+    pgn_url:            str = ""
+    game:               int = 1
+    move:               int = -1
+    piece_style:        str = "shape"
+    white_piece_color:  str = "white"
+    black_piece_color:  str = "black"
+    light_square:       str = "white"
+    dark_square:        str = "green"
+    board_background:   str = "white"
+    grid_color:         str = "black"
+    border_color:       str = "black"
+    show_coordinates:   bool = False
+    show_move_text:     bool = True
+    show_player_names:  bool = True
+    show_result:        bool = True
 
 
 # ── Low-level HTTP helper ───────────────────────────────────────────────────
@@ -215,6 +265,69 @@ async def generate_goban(params: GobanParams) -> bytes:
         "grid_thickness": params.grid_thickness,
         "highlight":      params.highlight,
     })
+
+
+async def generate_chess(params: ChessParams) -> tuple[bytes, bool]:
+    """Generate a chess frame via the sidecar and return (bmp_bytes, game_over).
+
+    ``game_over`` mirrors chess2bmp's exit code 2 (GAME_OVER / PAST_END,
+    surfaced by the sidecar as the ``X-Chess-Status: GAME_OVER`` response
+    header) — the image is still valid and should still be displayed, this
+    just tells the caller not to expect further progress on this game.
+
+    Exit code 1 (FATAL) is NOT a return value here — the sidecar turns it
+    into an HTTP 500 with the chess2bmp stderr as the error message, which
+    surfaces as a RuntimeError from _post(), exactly like every other
+    generator failure. Callers (see services.py) should catch RuntimeError,
+    log it, and — per the spec — avoid auto-incrementing/retrying blindly.
+    """
+    _LOGGER.info(
+        "Chess: source=%s game=%d move=%d piece_style=%s",
+        params.chess_source, params.game, params.move, params.piece_style,
+    )
+    url = f"{SIDECAR_URL}/generate/chess"
+    payload = {
+        "chess_source":       params.chess_source,
+        "pgn_text":           params.pgn_text,
+        "pgn_url":            params.pgn_url,
+        "game":               params.game,
+        "move":               params.move,
+        "piece_style":        params.piece_style,
+        "white_piece_color":  params.white_piece_color,
+        "black_piece_color":  params.black_piece_color,
+        "light_square":       params.light_square,
+        "dark_square":        params.dark_square,
+        "board_background":   params.board_background,
+        "grid_color":         params.grid_color,
+        "border_color":       params.border_color,
+        "show_coordinates":   params.show_coordinates,
+        "show_move_text":     params.show_move_text,
+        "show_player_names":  params.show_player_names,
+        "show_result":        params.show_result,
+    }
+    timeout = aiohttp.ClientTimeout(total=180)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload) as response:
+                if response.status == 200:
+                    data = await response.read()
+                    game_over = response.headers.get("X-Chess-Status") == "GAME_OVER"
+                    return data, game_over
+
+                try:
+                    body = await response.json()
+                    msg = body.get("error", str(body))
+                except Exception:
+                    msg = await response.text()
+                raise RuntimeError(f"Sidecar /generate/chess returned HTTP {response.status}: {msg}")
+
+    except aiohttp.ClientConnectorError as exc:
+        raise RuntimeError(
+            f"Cannot reach sidecar at {SIDECAR_URL} — is the "
+            f"'PhotopainterArt Generator' add-on running? ({exc})"
+        ) from exc
+    except aiohttp.ClientError as exc:
+        raise RuntimeError(f"HTTP error calling sidecar /generate/chess: {exc}") from exc
 
 
 async def generate_moire(params: MoireParams) -> bytes:

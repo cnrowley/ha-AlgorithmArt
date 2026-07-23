@@ -61,6 +61,18 @@ DEFAULT_STATE: dict[str, Any] = {
     "moire_pattern":     "honeycomb",
     "moire_background":  "white",
     "moire_linecolor":   "black",
+    # Chess options
+    "chess_mode":              "random",   # random | sequential | manual
+    "chess_piece_style":       "shape",    # shape | glyph | svg
+    "chess_white_color":       "white",
+    "chess_black_color":       "black",
+    "chess_light_square":      "white",
+    "chess_dark_square":       "green",
+    "chess_show_coordinates":  False,
+    "chess_show_move_text":    True,
+    "chess_show_player_names": True,
+    "chess_show_result":       True,
+    "chess_reset_after_game":  True,
 }
 
 

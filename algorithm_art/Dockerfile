@@ -44,18 +44,21 @@ COPY --from=builder /out/dla.x        /usr/local/bin/dla.x
 COPY --from=builder /out/fractal.x /usr/local/bin/fractal.x
 COPY --from=builder /out/goban.x      /usr/local/bin/goban.x
 COPY --from=builder /out/moire.x      /usr/local/bin/moire.x
+COPY --from=builder /out/chess2bmp.x  /usr/local/bin/chess2bmp.x
 
 RUN chmod +x \
     /usr/local/bin/dla.x \
     /usr/local/bin/fractal.x \
     /usr/local/bin/goban.x \
-    /usr/local/bin/moire.x
+    /usr/local/bin/moire.x \
+    /usr/local/bin/chess2bmp.x
 
 # Flask app and supporting modules
 WORKDIR /app
 COPY main.py          /app/main.py
 COPY art_generator.py /app/art_generator.py
 COPY goban_state.py   /app/goban_state.py
+COPY chess_state.py   /app/chess_state.py
 COPY scheduler.py     /app/scheduler.py
 COPY web_ui.py        /app/web_ui.py
 COPy sgf_directory.py /app/sgf_directory.py
@@ -66,6 +69,9 @@ COPY services.py /app/services.py
 
 # SGF game library
 COPY data/go_sgf /app/go_sgf
+
+# PGN game library (used by the "library" chess_source — see chess_state.py)
+COPY data/chess_pgn /app/chess_pgn
 
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh

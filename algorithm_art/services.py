@@ -20,20 +20,26 @@ from .art_generator import (
     GOBAN_HIGHLIGHT_MODES,
     MOIRE_PATTERNS,
     MOIRE_COLOURS,
+    CHESS_SOURCES,
+    CHESS_PIECE_STYLES,
+    CHESS_COLOURS,
     DLAParams,
     FractalParams,
     GobanParams,
     MoireParams,
+    ChessParams,
     generate_dla,
     generate_fractal,
     generate_goban,
     generate_moire,
+    generate_chess,
 )
 from .const import (
     ART_TYPE_DLA,
     ART_TYPE_FRACTAL,
     ART_TYPE_GOBAN,
     ART_TYPE_MOIRE,
+    ART_TYPE_CHESS,
     ART_TYPES,
     DOMAIN,
     GOBAN_SOURCES,
@@ -97,6 +103,32 @@ SERVICE_GENERATE_ART_SCHEMA = vol.Schema(
         vol.Optional("moire_linecolor",  default="black"):     vol.In(MOIRE_COLOURS),
         # Explicit iteration override; omit to let HA's own counter advance.
         vol.Optional("moire_iteration"): vol.All(int, vol.Range(min=0)),
+
+        # ── Chess ─────────────────────────────────────────────────────────────
+        # "library" (default) advances the sidecar's own persistent game —
+        # see ChessStateManager — the same pattern goban_source="library"
+        # uses. "url"/"inline" render one specific ply of caller-supplied
+        # PGN text and do not touch the persistent library state at all.
+        vol.Optional("chess_source",          default="library"): vol.In(CHESS_SOURCES),
+        vol.Optional("chess_pgn_text",        default=""): str,
+        vol.Optional("chess_pgn_url",         default=""): str,
+        vol.Optional("chess_game",            default=1): vol.All(int, vol.Range(min=1)),
+        # -1 = final position (chess2bmp's own convention); only meaningful
+        # for chess_source in ("url", "inline") — "library" ignores this and
+        # advances its own ply counter instead.
+        vol.Optional("chess_move",            default=-1): vol.All(int, vol.Range(min=-1, max=600)),
+        vol.Optional("chess_piece_style",     default="shape"): vol.In(CHESS_PIECE_STYLES),
+        vol.Optional("chess_white_piece_color", default="white"): vol.In(CHESS_COLOURS),
+        vol.Optional("chess_black_piece_color", default="black"): vol.In(CHESS_COLOURS),
+        vol.Optional("chess_light_square",    default="white"): vol.In(CHESS_COLOURS),
+        vol.Optional("chess_dark_square",     default="green"): vol.In(CHESS_COLOURS),
+        vol.Optional("chess_board_background", default="white"): vol.In(CHESS_COLOURS),
+        vol.Optional("chess_grid_color",      default="black"): vol.In(CHESS_COLOURS),
+        vol.Optional("chess_border_color",    default="black"): vol.In(CHESS_COLOURS),
+        vol.Optional("chess_show_coordinates",   default=False): cv.boolean,
+        vol.Optional("chess_show_move_text",     default=True):  cv.boolean,
+        vol.Optional("chess_show_player_names",  default=True):  cv.boolean,
+        vol.Optional("chess_show_result",        default=True):  cv.boolean,
     }
 )
 
@@ -174,6 +206,28 @@ async def async_register_services(hass: HomeAssistant, coordinator: Photopainter
 
         except RuntimeError as err:
             _LOGGER.error("Image generation failed: %s", err)
+            # chess2bmp exit code 1 (FATAL) surfaces here as a RuntimeError
+            # from generate_chess()/_post(). Per the spec: notify the user
+            # (a log line alone is easy to miss) rather than silently
+            # failing — and note that state was NOT advanced by the sidecar
+            # in this case, so the next scheduled/manual call will retry the
+            # same ply rather than skipping ahead.
+            if data.get("art_type") == ART_TYPE_CHESS:
+                hass.async_create_task(
+                    hass.services.async_call(
+                        "persistent_notification",
+                        "create",
+                        {
+                            "title": "AlgorithmArt: chess render failed",
+                            "message": (
+                                f"chess2bmp exited fatally and no image was "
+                                f"produced. The current move was NOT "
+                                f"advanced. Details: {err}"
+                            ),
+                            "notification_id": "algorithm_art_chess_error",
+                        },
+                    )
+                )
         except Exception as err:
             _LOGGER.error("Unexpected error producing image: %s", err, exc_info=True)
 
@@ -286,6 +340,38 @@ async def async_register_services(hass: HomeAssistant, coordinator: Photopainter
                 background = data.get("moire_background", "white"),
                 linecolor  = data.get("moire_linecolor",  "black"),
             ))
+
+        if art_type == ART_TYPE_CHESS:
+            # "library" advances the sidecar's own persistent PGN game — the
+            # move/game selection happens entirely on the sidecar side (see
+            # ChessStateManager.next_frame), so those fields are simply
+            # ignored for that source, exactly like goban_move is ignored
+            # when goban_source="library".
+            image_bytes, game_over = await generate_chess(ChessParams(
+                chess_source       = data.get("chess_source", "library"),
+                pgn_text           = data.get("chess_pgn_text", ""),
+                pgn_url            = data.get("chess_pgn_url", ""),
+                game               = data.get("chess_game", 1),
+                move               = data.get("chess_move", -1),
+                piece_style        = data.get("chess_piece_style", "shape"),
+                white_piece_color  = data.get("chess_white_piece_color", "white"),
+                black_piece_color  = data.get("chess_black_piece_color", "black"),
+                light_square       = data.get("chess_light_square", "white"),
+                dark_square        = data.get("chess_dark_square", "green"),
+                board_background   = data.get("chess_board_background", "white"),
+                grid_color         = data.get("chess_grid_color", "black"),
+                border_color       = data.get("chess_border_color", "black"),
+                show_coordinates   = data.get("chess_show_coordinates", False),
+                show_move_text     = data.get("chess_show_move_text", True),
+                show_player_names  = data.get("chess_show_player_names", True),
+                show_result        = data.get("chess_show_result", True),
+            ))
+            if game_over:
+                _LOGGER.info(
+                    "Chess service: game complete — this was the final "
+                    "position (sidecar will start a new game on the next call)"
+                )
+            return image_bytes
 
         _LOGGER.error("Unknown art type: %s", art_type)
         return None
