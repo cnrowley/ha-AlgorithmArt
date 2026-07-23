@@ -61,6 +61,7 @@ DEFAULT_STATE: dict[str, Any] = {
     "moire_pattern":     "honeycomb",
     "moire_background":  "white",
     "moire_linecolor":   "black",
+    "moire_density":     1.0,
     # Chess options
     "chess_mode":              "random",   # random | sequential | manual
     "chess_piece_style":       "shape",    # shape | glyph | svg

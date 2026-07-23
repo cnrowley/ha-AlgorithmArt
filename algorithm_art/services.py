@@ -101,6 +101,10 @@ SERVICE_GENERATE_ART_SCHEMA = vol.Schema(
         vol.Optional("moire_pattern",    default="honeycomb"): vol.In(MOIRE_PATTERNS),
         vol.Optional("moire_background", default="white"):     vol.In(MOIRE_COLOURS),
         vol.Optional("moire_linecolor",  default="black"):     vol.In(MOIRE_COLOURS),
+        # Pattern density: >1 = tighter/more repeats, <1 = sparser.
+        vol.Optional("moire_density", default=1.0): vol.All(
+            vol.Coerce(float), vol.Range(min=0.1, max=6.0)
+        ),
         # Explicit iteration override; omit to let HA's own counter advance.
         vol.Optional("moire_iteration"): vol.All(int, vol.Range(min=0)),
 
@@ -339,6 +343,7 @@ async def async_register_services(hass: HomeAssistant, coordinator: Photopainter
                 iteration  = iteration,
                 background = data.get("moire_background", "white"),
                 linecolor  = data.get("moire_linecolor",  "black"),
+                density    = data.get("moire_density",    1.0),
             ))
 
         if art_type == ART_TYPE_CHESS:

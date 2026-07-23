@@ -10,8 +10,8 @@ Sub pages   — one per generator, reached via "Configure options →". Each
 
 Everything lives in a single HTML document; navigation between the home
 page and the sub pages is client-side (hash routing: #/home, #/dla,
-#/fractal, #/goban) so the back button and direct links both work, without
-needing extra Flask routes.
+#/fractal, #/goban, #/moire, #/chess) so the back button and direct links
+both work, without needing extra Flask routes.
 """
 
 from __future__ import annotations
@@ -111,6 +111,16 @@ select:focus,input:focus{outline:none;border-color:var(--acc)}
 .interval-row input[type=number]{flex:1}
 .interval-row select{flex:1}
 
+/* -- Range slider -- */
+.range-row{display:flex;align-items:center;gap:12px}
+.range-row input[type=range]{flex:1;accent-color:var(--acc);height:4px}
+.range-val{font-size:12px;color:var(--acc);font-weight:700;min-width:36px;text-align:right}
+
+/* -- Checkbox toggles (chess show-flags) -- */
+.chk-row{display:flex;flex-wrap:wrap;gap:14px}
+.chk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt);cursor:pointer}
+.chk input{accent-color:var(--acc);width:15px;height:15px;cursor:pointer}
+
 /* -- Colour swatches -- */
 .swatches{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
 .sw{width:30px;height:30px;border-radius:6px;cursor:pointer;
@@ -202,6 +212,13 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
       <div class="mc-stat" id="mc-moire-stat">iteration -</div>
       <button class="btn bs mc-cfg" onclick="event.stopPropagation();openPage('moire')">Configure options &rarr;</button>
     </div>
+    <div class="method-card" id="mc-chess" onclick="selectMethod('chess')">
+      <div class="mc-top"><span class="mc-icon">&#9814;</span><span class="mc-title">Chess</span>
+        <span class="mc-badge">ACTIVE</span></div>
+      <div class="mc-sub">Replays PGN game records</div>
+      <div class="mc-stat" id="mc-chess-stat">- / -</div>
+      <button class="btn bs mc-cfg" onclick="event.stopPropagation();openPage('chess')">Configure options &rarr;</button>
+    </div>
   </div>
 
   <div class="card">
@@ -249,6 +266,8 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
     <div class="st"><span class="sk">Moire iteration</span><span class="sv" id="ss-moireiter">-</span></div>
     <div class="st"><span class="sk">Go game</span><span class="sv" id="ss-game">-</span></div>
     <div class="st"><span class="sk">Go move</span><span class="sv" id="ss-move">-</span></div>
+    <div class="st"><span class="sk">Chess game</span><span class="sv" id="ss-chessgame">-</span></div>
+    <div class="st"><span class="sk">Chess ply</span><span class="sv" id="ss-chessmove">-</span></div>
     <div class="st"><span class="sk">Last push</span><span class="sv" id="ss-last">-</span></div>
   </div>
 
@@ -477,6 +496,18 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
       <div class="swatches" id="moire-line-sw"></div>
       <input type="hidden" id="moire-linecolor" value="black">
     </div>
+    <div class="field" style="margin-bottom:14px">
+      <label>Pattern density (-density)</label>
+      <div class="range-row">
+        <input type="range" id="moire-density" min="0.25" max="4" step="0.05" value="1"
+          oninput="document.getElementById('moire-density-val').textContent=parseFloat(this.value).toFixed(2)+'\u00d7'"
+          onchange="moireSave()">
+        <span class="range-val" id="moire-density-val">1.00&times;</span>
+      </div>
+      <p class="hint" style="margin:6px 0 0">Higher packs the pattern tighter (more
+        repeats across the canvas); lower spreads it out. 1.00&times; is the
+        original spacing.</p>
+    </div>
     <div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
       <label style="margin:0">Next iteration</label>
       <span id="moire-iter-lbl" style="font-size:12px;color:var(--mut)">0</span>
@@ -488,6 +519,122 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
   </div>
 </section>
 
+<!-- ============================ CHESS ============================ -->
+<section class="view" id="view-chess">
+  <div class="crumb"><a onclick="openPage('home')">&larr; Home</a> / Chess</div>
+  <div class="card">
+    <h2>Chess</h2>
+    <p class="hint">Replays PGN game records move by move with
+      <code>chess2bmp</code>. Exit code 2 (game over / past-the-end) still
+      renders an image — the board holds on the final position for a few
+      cycles before moving on to the next game.</p>
+
+    <!-- Current game -->
+    <div style="background:var(--sur2);border-radius:8px;padding:14px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+        <div>
+          <div style="font-weight:600;margin-bottom:2px" id="cc-name">No game selected</div>
+          <div style="font-size:11px;color:var(--mut)" id="cc-event">-</div>
+        </div>
+        <span id="cc-badge" style="font-size:10px;padding:3px 8px;border-radius:20px;
+          background:var(--acc);color:#fff">RANDOM</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <label>Progress (-move)</label>
+        <span id="cc-move-lbl" style="font-size:12px;color:var(--mut)">- / -</span>
+      </div>
+      <div class="prog-wrap"><div class="prog-bar" id="cc-prog" style="width:0%"></div></div>
+      <div id="cc-error" style="display:none;margin-top:10px;font-size:12px;
+        color:var(--red);background:color-mix(in srgb,var(--red) 12%,transparent);
+        border:1px solid var(--red);border-radius:6px;padding:8px 10px"></div>
+    </div>
+
+    <!-- Controls -->
+    <div class="row" style="margin-bottom:14px">
+      <div class="field">
+        <label>Game selection</label>
+        <select id="chess-mode" onchange="setChessMode(this.value)">
+          <option value="random">Random</option>
+          <option value="sequential">Sequential</option>
+          <option value="manual">Manual (pick below)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Jump to ply (-move, -1=final)</label>
+        <input type="number" id="chess-move-inp" min="-1" value="1">
+      </div>
+    </div>
+
+    <!-- Piece / board style -->
+    <details style="margin-bottom:14px" open>
+      <summary style="cursor:pointer;font-size:12px;color:var(--mut);padding:6px 0">
+        Piece &amp; board style
+      </summary>
+      <div style="padding-top:12px">
+        <div class="row" style="margin-bottom:14px">
+          <div class="field">
+            <label>Piece style (-piece-style)</label>
+            <select id="chess-piece-style" onchange="chessStyleSave()">
+              <option value="shape">Shape</option>
+              <option value="glyph">Glyph</option>
+              <option value="svg">SVG</option>
+            </select>
+          </div>
+        </div>
+        <div class="field" style="margin-bottom:14px">
+          <label>White pieces (-white-piece-color)</label>
+          <div class="swatches" id="chess-white-piece-sw"></div>
+          <input type="hidden" id="chess-white-piece-color" value="white">
+        </div>
+        <div class="field" style="margin-bottom:14px">
+          <label>Black pieces (-black-piece-color)</label>
+          <div class="swatches" id="chess-black-piece-sw"></div>
+          <input type="hidden" id="chess-black-piece-color" value="black">
+        </div>
+        <div class="field" style="margin-bottom:14px">
+          <label>Light squares (-light-square)</label>
+          <div class="swatches" id="chess-light-sw"></div>
+          <input type="hidden" id="chess-light-square" value="white">
+        </div>
+        <div class="field" style="margin-bottom:14px">
+          <label>Dark squares (-dark-square)</label>
+          <div class="swatches" id="chess-dark-sw"></div>
+          <input type="hidden" id="chess-dark-square" value="green">
+        </div>
+        <div class="field" style="margin-bottom:6px">
+          <label>Display options</label>
+          <div class="chk-row">
+            <label class="chk"><input type="checkbox" id="chess-show-coords" onchange="chessStyleSave()"> Coordinates</label>
+            <label class="chk"><input type="checkbox" id="chess-show-movetext" checked onchange="chessStyleSave()"> Move text</label>
+            <label class="chk"><input type="checkbox" id="chess-show-players" checked onchange="chessStyleSave()"> Player names</label>
+            <label class="chk"><input type="checkbox" id="chess-show-result" checked onchange="chessStyleSave()"> Result</label>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <div class="btn-row" style="margin-bottom:16px">
+      <button class="btn bs" onclick="chessRestart()">Restart game</button>
+      <button class="btn bs" onclick="chessSkip()">Skip game</button>
+      <button class="btn bs" onclick="chessJumpMove()">Jump to ply</button>
+      <button class="btn bp" onclick="generateNow('chess')">Generate frame</button>
+    </div>
+
+    <!-- Game library -->
+    <input class="tsearch" type="text" placeholder="Search games..."
+      oninput="filterChessGames(this.value)">
+    <div class="twrap">
+      <table>
+        <thead><tr>
+          <th>#</th><th>Event</th><th>White</th><th>Black</th><th>Result</th><th></th>
+        </tr></thead>
+        <tbody id="ctbody"></tbody>
+      </table>
+    </div>
+    <div id="ccnt" style="font-size:11px;color:var(--mut);margin-top:6px"></div>
+  </div>
+</section>
+
 </div>
 
 <div id="toast"></div>
@@ -496,7 +643,8 @@ tr.curr td{background:color-mix(in srgb,var(--acc) 15%,transparent)}
 // -- State --
 const COLOURS = ['black','white','green','blue','red','yellow','orange'];
 const MOIRE_COLOURS = ['white','black','red','green','blue','yellow'];
-const PAGES = ['home','dla','fractal','goban','moire'];
+const CHESS_COLOURS = ['white','black','red','green','blue','yellow'];
+const PAGES = ['home','dla','fractal','goban','moire','chess'];
 const S = {
   activeTab:   'dla',      // the currently selected *method* (scheduler target)
   fracFg:      'white',
@@ -514,9 +662,19 @@ const S = {
   moireBg:      'white',
   moireLine:    'black',
   moireIter:    0,
+  moireDensity: 1.0,
   games:       [],
   filtered:    [],
   currentId:   null,
+  chessMode:        'random',
+  chessPieceStyle:  'shape',
+  chessWhitePiece:  'white',
+  chessBlackPiece:  'black',
+  chessLight:       'white',
+  chessDark:        'green',
+  chessGames:       [],
+  chessFiltered:    [],
+  chessCurrentId:   null,
   schEnabled:  false,
   schInterval: 300,
   nextFireTs:  null,
@@ -560,6 +718,7 @@ function updateGenBar(){
     fractal:['Generate fractal',      'Renders fractal with current settings'],
     goban:  ['Generate Go frame',     'Advances the game one move'],
     moire:  ['Generate moire frame',  'Advances the moire iteration by one'],
+    chess:  ['Generate chess frame',  'Advances the game one ply'],
   };
   const [main,sub]=labels[S.activeTab]||['Generate',''];
   const lbl=document.getElementById('gen-label');
@@ -639,6 +798,29 @@ async function poll(){
     document.querySelectorAll('#gtbody tr').forEach(tr=>
       tr.classList.toggle('curr',parseInt(tr.dataset.id)===S.currentId));
 
+    // Chess
+    const cs=d.chess||{};
+    S.chessCurrentId=cs.current_game_id;
+    document.getElementById('chess-mode').value=cs.selection_mode||'random';
+    document.getElementById('cc-name').textContent=cs.game_name||'No game selected';
+    document.getElementById('cc-event').textContent=cs.event||'-';
+    document.getElementById('cc-badge').textContent=(cs.selection_mode||'random').toUpperCase();
+    const cpct=cs.total_moves>0?Math.round(Math.max(0,cs.current_move||0)/cs.total_moves*100):0;
+    document.getElementById('cc-prog').style.width=Math.min(cpct,100)+'%';
+    document.getElementById('cc-move-lbl').textContent=
+      `ply ${Math.max(0,cs.current_move||0)} / ${cs.total_moves||0}`;
+    document.getElementById('mc-chess-stat').textContent=
+      `ply ${Math.max(0,cs.current_move||0)} / ${cs.total_moves||0}`;
+    const ccErr=document.getElementById('cc-error');
+    if(cs.last_error){
+      ccErr.style.display='block';
+      ccErr.textContent='chess2bmp error (state not advanced): '+cs.last_error;
+    } else {
+      ccErr.style.display='none';
+    }
+    document.querySelectorAll('#ctbody tr').forEach(tr=>
+      tr.classList.toggle('curr',parseInt(tr.dataset.id)===S.chessCurrentId));
+
     // Scheduler
     const sch=d.scheduler||{};
     S.schEnabled=sch.enabled||false;
@@ -671,6 +853,18 @@ async function poll(){
     document.getElementById('moire-pattern').value=sch.moire_pattern||'honeycomb';
     setSwatchSel('moire-bg-sw','moire-background', sch.moire_background||'white');
     setSwatchSel('moire-line-sw','moire-linecolor', sch.moire_linecolor||'black');
+    S.moireDensity=sch.moire_density||1.0;
+    document.getElementById('moire-density').value=S.moireDensity;
+    document.getElementById('moire-density-val').textContent=parseFloat(S.moireDensity).toFixed(2)+'\u00d7';
+    document.getElementById('chess-piece-style').value=sch.chess_piece_style||'shape';
+    setSwatchSel('chess-white-piece-sw','chess-white-piece-color', sch.chess_white_color||'white');
+    setSwatchSel('chess-black-piece-sw','chess-black-piece-color', sch.chess_black_color||'black');
+    setSwatchSel('chess-light-sw','chess-light-square', sch.chess_light_square||'white');
+    setSwatchSel('chess-dark-sw','chess-dark-square', sch.chess_dark_square||'green');
+    document.getElementById('chess-show-coords').checked=!!sch.chess_show_coordinates;
+    document.getElementById('chess-show-movetext').checked=sch.chess_show_move_text!==false;
+    document.getElementById('chess-show-players').checked=sch.chess_show_player_names!==false;
+    document.getElementById('chess-show-result').checked=sch.chess_show_result!==false;
 
     // Interval presets dropdown
     const sel=document.getElementById('sch-preset');
@@ -690,6 +884,9 @@ async function poll(){
     document.getElementById('ss-game').textContent=gs.game_name||'-';
     document.getElementById('ss-move').textContent=
       `${gs.current_move||0} / ${gs.total_moves||0}`;
+    document.getElementById('ss-chessgame').textContent=cs.game_name||'-';
+    document.getElementById('ss-chessmove').textContent=
+      `${Math.max(0,cs.current_move||0)} / ${cs.total_moves||0}`;
     document.getElementById('ss-last').textContent=
       S.lastFireTs?new Date(S.lastFireTs).toLocaleTimeString():'-';
 
@@ -723,6 +920,18 @@ async function generateNow(methodOverride){
     payload.moire_pattern=document.getElementById('moire-pattern').value;
     payload.moire_background=document.getElementById('moire-background').value;
     payload.moire_linecolor=document.getElementById('moire-linecolor').value;
+    payload.moire_density=parseFloat(document.getElementById('moire-density').value)||1.0;
+  } else if(method==='chess'){
+    payload.chess_source='library';
+    payload.chess_piece_style=document.getElementById('chess-piece-style').value;
+    payload.chess_white_piece_color=document.getElementById('chess-white-piece-color').value;
+    payload.chess_black_piece_color=document.getElementById('chess-black-piece-color').value;
+    payload.chess_light_square=document.getElementById('chess-light-square').value;
+    payload.chess_dark_square=document.getElementById('chess-dark-square').value;
+    payload.chess_show_coordinates=document.getElementById('chess-show-coords').checked;
+    payload.chess_show_move_text=document.getElementById('chess-show-movetext').checked;
+    payload.chess_show_player_names=document.getElementById('chess-show-players').checked;
+    payload.chess_show_result=document.getElementById('chess-show-result').checked;
   }
 
   try{
@@ -760,6 +969,10 @@ function buildSwatches(cid, hid, selected, palette){
       if(hid==='frac-bg') S.fracBg=col;
       if(hid==='moire-background'){ S.moireBg=col; moireSave(); return; }
       if(hid==='moire-linecolor'){ S.moireLine=col; moireSave(); return; }
+      if(hid==='chess-white-piece-color'){ S.chessWhitePiece=col; chessStyleSave(); return; }
+      if(hid==='chess-black-piece-color'){ S.chessBlackPiece=col; chessStyleSave(); return; }
+      if(hid==='chess-light-square'){ S.chessLight=col; chessStyleSave(); return; }
+      if(hid==='chess-dark-square'){ S.chessDark=col; chessStyleSave(); return; }
       schedSave();
     };
     c.appendChild(d);
@@ -829,6 +1042,34 @@ async function moireReset(){
   toast('Moire sequence reset','ok'); poll();
 }
 
+// -- Chess --
+async function setChessMode(mode){
+  await fetch('/chess/mode',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+  toast('Chess mode -> '+mode,'ok'); schedSave(); poll();
+}
+async function chessRestart(){
+  await fetch('/chess/restart',{method:'POST'});
+  toast('Restarted from ply 1','ok'); poll();
+}
+async function chessSkip(){
+  await fetch('/chess/skip',{method:'POST'});
+  toast('Skipped to next game','ok'); poll();
+}
+async function chessJumpMove(){
+  const move=parseInt(document.getElementById('chess-move-inp').value);
+  await fetch('/chess/move',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({move: isNaN(move)?-1:move})});
+  toast('Jumped to ply '+move,'ok'); poll();
+}
+async function pickChessGame(id){
+  await fetch('/chess/select',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({game_id:id})});
+  document.getElementById('chess-mode').value='manual';
+  toast('Game selected','ok'); schedSave(); poll();
+}
+function chessStyleSave(){ schedSave(); }
+
 // -- Scheduler --
 function applyPreset(v){
   if(!v) return;
@@ -864,6 +1105,17 @@ async function schedSave(extra={}){
     moire_pattern:      document.getElementById('moire-pattern').value,
     moire_background:   document.getElementById('moire-background').value,
     moire_linecolor:    document.getElementById('moire-linecolor').value,
+    moire_density:      parseFloat(document.getElementById('moire-density').value)||1.0,
+    chess_mode:               document.getElementById('chess-mode').value,
+    chess_piece_style:        document.getElementById('chess-piece-style').value,
+    chess_white_color:        document.getElementById('chess-white-piece-color').value,
+    chess_black_color:        document.getElementById('chess-black-piece-color').value,
+    chess_light_square:       document.getElementById('chess-light-square').value,
+    chess_dark_square:        document.getElementById('chess-dark-square').value,
+    chess_show_coordinates:   document.getElementById('chess-show-coords').checked,
+    chess_show_move_text:     document.getElementById('chess-show-movetext').checked,
+    chess_show_player_names:  document.getElementById('chess-show-players').checked,
+    chess_show_result:        document.getElementById('chess-show-result').checked,
     ...extra,
   };
   const r=await fetch('/scheduler/settings',{method:'POST',
@@ -924,15 +1176,70 @@ function renderGames(){
   }
 }
 
+// -- Chess game table --
+async function loadChessGames(){
+  try{
+    const r=await fetch('/chess/games');
+    S.chessGames=await r.json();
+    S.chessFiltered=[...S.chessGames];
+    renderChessGames();
+    document.getElementById('ccnt').textContent=S.chessGames.length+' games in library';
+  }catch(e){console.warn('chess games load failed',e);}
+}
+
+function filterChessGames(q){
+  q=q.toLowerCase();
+  S.chessFiltered=q?S.chessGames.filter(g=>
+    (g.event||'').toLowerCase().includes(q)||
+    (g.white||'').toLowerCase().includes(q)||
+    (g.black||'').toLowerCase().includes(q)||
+    (g.filename||'').toLowerCase().includes(q)
+  ):[...S.chessGames];
+  renderChessGames();
+}
+
+function renderChessGames(){
+  const tb=document.getElementById('ctbody');
+  tb.innerHTML='';
+  S.chessFiltered.slice(0,200).forEach(g=>{
+    const tr=document.createElement('tr');
+    tr.dataset.id=g.id;
+    if(g.id===S.chessCurrentId) tr.classList.add('curr');
+    tr.innerHTML=`
+      <td style="color:var(--mut)">${g.id}</td>
+      <td title="${g.filename}"
+          style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        ${g.event||g.filename}</td>
+      <td style="color:var(--mut);font-size:11px;max-width:110px;overflow:hidden;
+          text-overflow:ellipsis;white-space:nowrap">${g.white||'-'}</td>
+      <td style="color:var(--mut);font-size:11px;max-width:110px;overflow:hidden;
+          text-overflow:ellipsis;white-space:nowrap">${g.black||'-'}</td>
+      <td style="color:var(--mut);font-size:11px">${g.result||'-'}</td>
+      <td><button class="btn bs play-btn" onclick="pickChessGame(${g.id})">Play</button></td>`;
+    tb.appendChild(tr);
+  });
+  if(S.chessFiltered.length>200){
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td colspan="6" style="color:var(--mut);text-align:center;padding:8px">
+      ...${S.chessFiltered.length-200} more - refine search</td>`;
+    tb.appendChild(tr);
+  }
+}
+
 // -- Init --
 buildSwatches('fg-sw','frac-fg', S.fracFg);
 buildSwatches('bg-sw','frac-bg', S.fracBg);
 buildSwatches('moire-bg-sw','moire-background', S.moireBg, MOIRE_COLOURS);
 buildSwatches('moire-line-sw','moire-linecolor', S.moireLine, MOIRE_COLOURS);
+buildSwatches('chess-white-piece-sw','chess-white-piece-color', S.chessWhitePiece, CHESS_COLOURS);
+buildSwatches('chess-black-piece-sw','chess-black-piece-color', S.chessBlackPiece, CHESS_COLOURS);
+buildSwatches('chess-light-sw','chess-light-square', S.chessLight, CHESS_COLOURS);
+buildSwatches('chess-dark-sw','chess-dark-square', S.chessDark, CHESS_COLOURS);
 openPage((location.hash||'#/home').replace('#/',''));
 updateGenBar();
 checkHealth();
 loadGames();
+loadChessGames();
 poll();
 setInterval(poll,5000);
 setInterval(checkHealth,30000);
@@ -985,8 +1292,24 @@ def ui_generate():
                 "pattern":    data.get("moire_pattern",    "honeycomb"),
                 "background": data.get("moire_background", "white"),
                 "linecolor":  data.get("moire_linecolor",  "black"),
+                "density":    data.get("moire_density",    1.0),
                 # No explicit "iteration" — let the sidecar auto-advance its
                 # own counter by one, same as a manual DLA generate does.
+            }, timeout=180)
+        elif art_type == "chess":
+            gen_resp = rq.post(f"{base}/generate/chess", json={
+                "chess_source":       data.get("chess_source", "library"),
+                "piece_style":        data.get("chess_piece_style",       "shape"),
+                "white_piece_color":  data.get("chess_white_piece_color", "white"),
+                "black_piece_color":  data.get("chess_black_piece_color", "black"),
+                "light_square":       data.get("chess_light_square",      "white"),
+                "dark_square":        data.get("chess_dark_square",       "green"),
+                "show_coordinates":   data.get("chess_show_coordinates",  False),
+                "show_move_text":     data.get("chess_show_move_text",    True),
+                "show_player_names":  data.get("chess_show_player_names", True),
+                "show_result":        data.get("chess_show_result",      True),
+                # "library" advances the sidecar's own persistent PGN game —
+                # same pattern as goban_source="file" above.
             }, timeout=180)
         else:
             return jsonify({"error": f"Unknown art_type: {art_type!r}"}), 400

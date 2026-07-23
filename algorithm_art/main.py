@@ -27,10 +27,12 @@ POST /goban/move                  { "move": N }
 
 ── Moire ──────────────────────────────────────────────────────────────────────
 POST /generate/moire              { "pattern", "iteration", "width", "height",
-                                     "background", "linecolor" }
+                                     "background", "linecolor", "density" }
                                    Always invoked as `moire -animate -iteration N`;
                                    rotation/translation/scale are derived by the
                                    binary itself from the iteration number.
+                                   "density" (0.1-6, default 1.0) scales how
+                                   tightly-packed the pattern repeats are.
 POST /generate/moire/reset        {}  (clears the last moire_state.json — the
                                         iteration counter itself lives in HA)
 
@@ -370,6 +372,7 @@ def _scheduler_generate(generator: str, state: dict) -> bytes | None:
                 "pattern":    state.get("moire_pattern",    "honeycomb"),
                 "background": state.get("moire_background", "white"),
                 "linecolor":  state.get("moire_linecolor",  "black"),
+                "density":    state.get("moire_density",    1.0),
                 "step":       step,
             }, timeout=180)
 
@@ -525,6 +528,7 @@ def status():
             "moire_pattern":         sch.get("moire_pattern",         "honeycomb"),
             "moire_background":      sch.get("moire_background",      "white"),
             "moire_linecolor":       sch.get("moire_linecolor",       "black"),
+            "moire_density":         sch.get("moire_density",         1.0),
             "chess_mode":            sch.get("chess_mode",            "random"),
             "chess_piece_style":     sch.get("chess_piece_style",     CHESS_PIECE_STYLE),
             "chess_white_color":     sch.get("chess_white_color",     "white"),
@@ -855,6 +859,17 @@ def generate_moire():
     width   = int(data.get("width",  DEFAULT_WIDTH)  or DEFAULT_WIDTH)
     height  = int(data.get("height", DEFAULT_HEIGHT) or DEFAULT_HEIGHT)
 
+    # Pattern density: >1 packs the pattern tighter (more repeats), <1
+    # spreads it out. Clamped to the same 0.1-6 range moire.go itself
+    # validates, so a bad value fails fast here with a clear message
+    # instead of as an opaque exit-1 from the binary.
+    try:
+        density = float(data.get("density", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "density must be a number"}), 400
+    if not (0.1 <= density <= 6):
+        return jsonify({"error": "density must be between 0.1 and 6"}), 400
+
     raw = data.get("iteration", None)
     if raw is not None:
         try:
@@ -884,6 +899,7 @@ def generate_moire():
             "-height",     str(height),
             "-background", bg,
             "-linecolor",  line,
+            "-density",    str(density),
             "-output",     str(bmp),
             "-state",      str(state),
         ]
@@ -921,8 +937,8 @@ def generate_moire():
         _last_source   = "generative"
         _last_art_type = "moire"
         _LOGGER.info(
-            "Moire: %d bytes  pattern=%s  iteration=%d  bg=%s  line=%s",
-            len(data_bytes), pattern, iteration, bg, line,
+            "Moire: %d bytes  pattern=%s  iteration=%d  bg=%s  line=%s  density=%g",
+            len(data_bytes), pattern, iteration, bg, line, density,
         )
         return Response(data_bytes, mimetype="image/bmp")
 
@@ -1171,7 +1187,7 @@ def generate_chess():
             pgn_text = data.get("pgn_text", "").strip()
             if not pgn_text:
                 return jsonify({"error": "pgn_text is empty"}), 400
-            pgn_path = work_path / "chess.pgn"
+            pgn_path = work_path / "inline.pgn"
             pgn_path.write_text(pgn_text, encoding="utf-8")
             target_ply = int(data.get("move", -1))
             game = int(data.get("game", 1))
@@ -1291,7 +1307,7 @@ def scheduler_settings():
         "fractal_fg", "fractal_bg", "fractal_mode",
         "goban_bg", "goban_board", "goban_white_color", "goban_black_color",
         "goban_grid_thickness", "goban_highlight", "goban_mode",
-        "moire_pattern", "moire_background", "moire_linecolor",
+        "moire_pattern", "moire_background", "moire_linecolor", "moire_density",
         "chess_mode", "chess_piece_style", "chess_white_color", "chess_black_color",
         "chess_light_square", "chess_dark_square", "chess_show_coordinates",
         "chess_show_move_text", "chess_show_player_names", "chess_show_result",
@@ -1314,6 +1330,11 @@ def scheduler_settings():
             updates["frames_per_update"] = min(50, max(1, int(updates["frames_per_update"])))
         except (TypeError, ValueError):
             updates["frames_per_update"] = 1
+    if "moire_density" in updates:
+        try:
+            updates["moire_density"] = min(6.0, max(0.1, float(updates["moire_density"])))
+        except (TypeError, ValueError):
+            updates["moire_density"] = 1.0
 
     _scheduler.update(updates)
     return jsonify({"status": "ok", "state": _scheduler.state})

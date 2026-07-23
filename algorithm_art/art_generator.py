@@ -118,7 +118,12 @@ class MoireParams:
     rotation/translation/scale are derived deterministically from
     ``iteration`` by the binary itself, so HA only needs to track a
     monotonically increasing frame counter and the cosmetic options
-    (pattern, colours, size).
+    (pattern, colours, size, density).
+
+    ``density`` (0.1-6, default 1.0) controls how tightly-packed the
+    pattern's repeating unit is — higher values pack more repeats into
+    the same canvas (smaller cells/tighter spacing), lower values spread
+    it out. Passed straight through as moire's own ``-density`` flag.
     """
     pattern:    str = "honeycomb"
     iteration:  int = 0
@@ -126,6 +131,7 @@ class MoireParams:
     height:     int = DISPLAY_HEIGHT
     background: str = "white"
     linecolor:  str = "black"
+    density:    float = 1.0
 
 
 @dataclass
@@ -333,8 +339,8 @@ async def generate_chess(params: ChessParams) -> tuple[bytes, bool]:
 async def generate_moire(params: MoireParams) -> bytes:
     """Generate a Moire animation frame via the sidecar and return BMP bytes."""
     _LOGGER.info(
-        "Moire: pattern=%s iteration=%d bg=%s line=%s",
-        params.pattern, params.iteration, params.background, params.linecolor,
+        "Moire: pattern=%s iteration=%d bg=%s line=%s density=%g",
+        params.pattern, params.iteration, params.background, params.linecolor, params.density,
     )
     return await _post("/generate/moire", {
         "pattern":    params.pattern,
@@ -343,6 +349,7 @@ async def generate_moire(params: MoireParams) -> bytes:
         "height":     params.height,
         "background": params.background,
         "linecolor":  params.linecolor,
+        "density":    params.density,
     })
 
 
