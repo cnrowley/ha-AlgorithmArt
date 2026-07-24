@@ -1,1 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="#fff" fill-rule="evenodd" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path stroke-linecap="butt" d="M9 39h27v-3H9zm3-3v-4h21v4zm-1-22V9h4v2h5V9h5v2h5V9h4v5"/><path d="m34 14-3 3H14l-3-3"/><path stroke-linecap="butt" stroke-linejoin="miter" d="M31 17v12.5H14V17"/><path d="m31 29.5 1.5 2.5h-20l1.5-2.5"/><path fill="none" stroke-linejoin="miter" d="M11 14h23"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480.000000 480.000000">
+<g transform="translate(0.000000,480.000000) scale(0.100000,-0.100000)"
+fill="#ffffff" stroke="#000000" stroke-width="70">
+<path d="M1115 3895 l-25 -24 0 -297 0 -298 160 -161 160 -161 0 -639 0 -639
+-61 -103 c-44 -74 -67 -103 -81 -103 -10 0 -30 -11 -43 -25 -25 -24 -25 -26
+-25 -215 l0 -190 -138 0 c-192 0 -182 13 -182 -241 0 -191 0 -196 23 -217 l23
+-22 1475 0 1476 0 21 23 c21 22 22 32 22 218 0 252 10 239 -183 239 l-137 0 0
+190 c0 189 0 191 -25 215 -13 14 -33 25 -43 25 -14 0 -37 29 -81 103 l-61 103
+0 639 0 639 160 161 160 161 0 298 0 297 -25 24 -24 25 -249 0 c-303 0 -292 5
+-292 -128 l0 -82 -185 0 -185 0 0 80 c0 73 -3 83 -25 105 l-24 25 -301 0 -301
+0 -24 -25 c-22 -22 -25 -32 -25 -105 l0 -80 -185 0 -185 0 0 83 c0 131 10 127
+-294 127 l-247 0 -24 -25z"/>
+</g>
+</svg>
